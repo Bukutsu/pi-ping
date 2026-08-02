@@ -1,0 +1,26 @@
+{
+  "name": "@bukutsu/pi-notify-when-away",
+  "version": "1.0.0",
+  "description": "Pi coding agent notification extension — pings only when unfocused and on real work",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "test": "PI_NOTIFY_SELFTEST=1 bun index.ts"
+  },
+  "keywords": [
+    "pi-extension",
+    "pi-coding-agent",
+    "notification",
+    "terminal-focus"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0"
+  },
+  "pi": {
+    "extensions": [
+      "index.ts"
+    ]
+  }
+}
