@@ -1,4 +1,4 @@
-# pi-notify-when-away
+# pi-ping
 
 A 100% pi-native notification extension for the [pi coding agent](https://pi.dev/).
 Pings only when a turn finishes, you are **not** looking at the terminal, and real work was done.

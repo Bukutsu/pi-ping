@@ -1,5 +1,5 @@
 /**
- * pi-notify-when-away — Ping only when it's worth it AND you're not looking.
+ * pi-ping — Ping only when it's worth it AND you're not looking.
  * 100% pi-native: no wrapper scripts, no GNOME extensions, no OS dependencies.
  *
  * Mechanism (same approach as Codex CLI, via pi's extension API):

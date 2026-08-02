@@ -1,5 +1,5 @@
 {
-  "name": "@bukutsu/pi-notify-when-away",
+  "name": "@bukutsu/pi-ping",
   "version": "1.0.0",
   "description": "Pi coding agent notification extension — pings only when unfocused and on real work",
   "main": "index.ts",
