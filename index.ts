@@ -86,19 +86,24 @@ function writeToTty(data: string): void {
 
 function sendNotify(body: string): void {
   let seq: string;
+  let terminalNotifies = true;
   if (process.env.KITTY_WINDOW_ID) {
     seq = `${ESC}]99;i=1:d=0;Pi${ESC}\\${ESC}]99;i=1:p=body;${body}${ESC}\\`;
   } else if (OSC9_TERMS.has(process.env.TERM_PROGRAM ?? "")) {
     seq = `${ESC}]9;Pi: ${body}\x07`;
   } else {
+    // Unknown terminal: OSC 777 may render nothing, so notify-send below covers it.
     seq = `${ESC}]777;notify;Pi;${body}\x07`;
+    terminalNotifies = false;
   }
   if (process.env.TMUX) seq = `${ESC}Ptmux;${seq.split(ESC).join(ESC + ESC)}${ESC}\\`;
-  
+
   writeToTty(seq);
 
-  // Fallback desktop notification via notify-send on Linux if available
-  if (process.platform === "linux") {
+  // Desktop notification fallback for terminals that don't render OSC 99/9
+  // natively. Terminals we send OSC 99/9 to show the notification themselves;
+  // notify-send on top of that would duplicate it.
+  if (process.platform === "linux" && !terminalNotifies) {
     execFile("notify-send", ["-a", "Pi", "Pi", body], () => {});
   }
 }
