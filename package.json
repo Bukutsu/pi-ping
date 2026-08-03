@@ -2,21 +2,24 @@
   "name": "@bukutsu/pi-ping",
   "version": "1.0.0",
   "description": "Pi coding agent notification extension — pings only when unfocused and on real work",
-  "main": "index.ts",
   "type": "module",
   "scripts": {
-    "test": "PI_NOTIFY_SELFTEST=1 bun index.ts"
+    "test": "PI_NOTIFY_SELFTEST=1 bun index.ts",
+    "typecheck": "bunx tsc --noEmit --strict --skipLibCheck index.ts"
   },
   "keywords": [
+    "pi-package",
     "pi-extension",
     "pi-coding-agent",
     "notification",
     "terminal-focus"
   ],
-  "author": "",
   "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.74.0"
+    "@earendil-works/pi-coding-agent": "^0.83.0"
   },
   "pi": {
     "extensions": [

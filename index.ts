@@ -8,8 +8,10 @@
  *      before its own TUI parser, with `{ consume: true }` support.
  *   3. Terminal sends FocusIn (ESC [ I) / FocusOut (ESC [ O); we strip and
  *      consume them so pi's parser never sees them, tracking focus state.
- *   4. On agent_end: ping only if terminal is unfocused AND the turn did real
- *      work (>=10s, tool calls, or errors). Fallbacks: tmux window_focused
+ *   4. On agent_settled (after auto-retries, compaction retries, and queued
+ *      follow-ups finish): ping only if terminal is unfocused AND the turn did
+ *      real work (>=10s, tool calls, or errors). Runs interrupted mid-flight
+ *      (no agent_end ever fired) stay silent. Fallbacks: tmux window_focused
  *      when inside tmux; heuristic tier when no focus source exists.
  *
  * Delivery: OSC 99 (kitty) / OSC 9 (ghostty, iTerm, WezTerm, warp) / OSC 777,
@@ -28,6 +30,8 @@ const ESC = "\x1b";
 
 let focused = true; // assume focused until a focus event says otherwise (matches Codex)
 let gotFocusEvent = false;
+let focusEnabled = false; // DECSET 1004 active in the current session
+let unsubscribeInput: (() => void) | undefined;
 
 /** Strip FocusIn/FocusOut from raw input, updating focus state.
  *  Returns null when fully consumed, the stripped string, or undefined if unchanged. */
@@ -114,14 +118,17 @@ export default function (pi: ExtensionAPI): void {
   let startMs = 0;
   let toolCalls = 0;
   let errors = 0;
+  let lastStopReason: string | undefined;
+  let agentEnded = false; // agent_end fired for the current run
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return; // focus reporting only makes sense interactively
-    
+
     writeToTty(`${ESC}[?1004h`); // ask the terminal for focus events
+    focusEnabled = true;
 
     try {
-      ctx.ui.onTerminalInput((data) => {
+      unsubscribeInput = ctx.ui.onTerminalInput((data) => {
         const out = scanFocusInput(data);
         if (out === null) return { consume: true };
         return out === undefined ? undefined : { data: out };
@@ -131,7 +138,14 @@ export default function (pi: ExtensionAPI): void {
     }
   });
 
+  // Session-scoped teardown: idempotent, and resets state for the next session.
   const disableFocus = () => {
+    if (!focusEnabled && !unsubscribeInput) return;
+    focusEnabled = false;
+    unsubscribeInput?.();
+    unsubscribeInput = undefined;
+    focused = true;
+    gotFocusEvent = false;
     writeToTty(`${ESC}[?1004l`);
   };
   pi.on("session_shutdown", disableFocus);
@@ -141,6 +155,8 @@ export default function (pi: ExtensionAPI): void {
     startMs = Date.now();
     toolCalls = 0;
     errors = 0;
+    lastStopReason = undefined;
+    agentEnded = false;
   });
 
   pi.on("tool_execution_end", (event) => {
@@ -148,12 +164,21 @@ export default function (pi: ExtensionAPI): void {
     if (event.isError) errors++;
   });
 
-  pi.on("agent_end", async (event, ctx) => {
+  // agent_settled has no messages; remember the final stop reason from agent_end.
+  pi.on("agent_end", (event) => {
+    agentEnded = true;
+    const lastAssistant = [...(event.messages ?? [])].reverse().find((m) => m.role === "assistant");
+    lastStopReason = lastAssistant?.stopReason;
+  });
+
+  // Ping only once the run has fully settled — no pending auto-retry,
+  // compaction retry, or queued follow-up will run afterwards.
+  pi.on("agent_settled", async (_event, ctx) => {
     if (ctx.mode !== "tui") return; // headless/child session (e.g. subagent) — parent pings instead
     const dur = startMs ? Date.now() - startMs : 0;
-    const lastAssistant = [...(event.messages ?? [])].reverse().find((m) => m.role === "assistant");
 
-    if (lastAssistant?.stopReason === "aborted") return; // turn was aborted
+    if (!agentEnded) return; // run interrupted mid-flight — never finished, stay silent
+    if (lastStopReason === "aborted") return; // turn was aborted
     if (toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
 
     const focusedNow = await terminalFocused();
@@ -177,4 +202,34 @@ export default function (pi: ExtensionAPI): void {
       ctx.ui.notify(msg, "info");
     },
   });
+}
+
+// ── self-test (PI_NOTIFY_SELFTEST=1 bun index.ts) ─────────────────────────
+
+if (process.env.PI_NOTIFY_SELFTEST) {
+  const assert = (cond: boolean, label: string) => {
+    if (cond) {
+      console.log(`ok - ${label}`);
+    } else {
+      console.error(`FAIL - ${label}`);
+      process.exit(1);
+    }
+  };
+
+  const t = (input: string, expected: string | null | undefined, label: string) => {
+    const got = scanFocusInput(input);
+    assert(got === expected, `${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(expected)}`);
+  };
+
+  t("hello", undefined, "no focus events pass through");
+  t(`${ESC}[I`, null, "FocusIn consumed");
+  t(`${ESC}[O`, null, "FocusOut consumed");
+  t(`a${ESC}[Ib`, "ab", "FocusIn stripped mid-stream");
+  t(`${ESC}[Ix${ESC}[O`, "x", "both events stripped");
+  t(`${ESC}[I${ESC}[O`, null, "only focus events fully consumed");
+  // Snapshot through a call so TS does not narrow the module-level `let` state.
+  const state = () => ({ focused, gotFocusEvent });
+  assert(state().focused === false, "focus state follows last event (FocusOut)");
+  assert(state().gotFocusEvent === true, "gotFocusEvent set");
+  console.log("all self-tests passed");
 }

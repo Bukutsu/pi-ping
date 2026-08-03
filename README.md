@@ -15,6 +15,8 @@ No wrapper scripts, no GNOME shell extensions, no external daemons.
    - **Trivial turns**: Skips turns <10s with no tool calls and no errors.
    - **Aborted turns**: Skips when you hit Escape.
    - **Focused terminal**: Stays completely silent when you are looking.
+   - **Fully settled**: Pings on `agent_settled`, so auto-retries, compaction retries, and queued follow-ups finish before the ping fires.
+   - **Interrupted runs**: Runs killed mid-flight (no `agent_end` ever fired) stay silent — no "done" ping for work that never finished.
 
 3. **Fallback Ladder**:
    - Primary: Terminal focus reporting (`Ghostty`, `kitty`, `iTerm2`, `WezTerm`, etc.)
@@ -31,10 +33,14 @@ No wrapper scripts, no GNOME shell extensions, no external daemons.
 ## Installation
 
 ```bash
-cp -r ~/Projects/pi-notify-when-away ~/.pi/agent/extensions/
+pi install ~/Projects/pi-ping        # registered as a local package
 ```
 
-Or copy `index.ts` directly into `~/.pi/agent/extensions/notify-when-away.ts`.
+Or copy the file directly:
+
+```bash
+cp ~/Projects/pi-ping/index.ts ~/.pi/agent/extensions/pi-ping.ts
+```
 
 ## Commands
 
