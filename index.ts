@@ -144,6 +144,7 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.on("agent_end", async (event, ctx) => {
+    if (ctx.mode !== "tui") return; // headless/child session (e.g. subagent) — parent pings instead
     const dur = startMs ? Date.now() - startMs : 0;
     const lastAssistant = [...(event.messages ?? [])].reverse().find((m) => m.role === "assistant");
 
