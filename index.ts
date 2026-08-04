@@ -27,27 +27,36 @@ const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
 const ESC = "\x1b";
 
 // ── focus state ──────────────────────────────────────────────────────────
+// NOTE: focus state must be per-session, not module-level. pi loads the
+// extension module once per cwd and reuses the same factory for in-process
+// child sessions (pi-background-agents subagents run in the parent cwd by
+// default), so module-level `let`s are SHARED between the parent and child
+// sessions. A child's session_shutdown would otherwise call disableFocus()
+// and tear down the parent's focus tracking. Keep this state inside the
+// factory closure below.
 
-let focused = true; // assume focused until a focus event says otherwise (matches Codex)
-let gotFocusEvent = false;
-let focusEnabled = false; // DECSET 1004 active in the current session
-let unsubscribeInput: (() => void) | undefined;
+export type FocusState = { focused: boolean; gotFocusEvent: boolean };
 
-/** Strip FocusIn/FocusOut from raw input, updating focus state.
+/** Fresh per-session focus state: assume focused until a focus event says otherwise (matches Codex). */
+export function initialFocusState(): FocusState {
+  return { focused: true, gotFocusEvent: false };
+}
+
+/** Strip FocusIn/FocusOut from raw input, updating `state`.
  *  Returns null when fully consumed, the stripped string, or undefined if unchanged. */
-export function scanFocusInput(data: string): string | null | undefined {
+export function scanFocusInput(data: string, state: FocusState): string | null | undefined {
   let out = "";
   let last = 0;
   for (let i = 0; i < data.length; i++) {
     if (data.startsWith(`${ESC}[I`, i)) {
-      focused = true;
-      gotFocusEvent = true;
+      state.focused = true;
+      state.gotFocusEvent = true;
       out += data.slice(last, i);
       last = i + 3;
       i += 2;
     } else if (data.startsWith(`${ESC}[O`, i)) {
-      focused = false;
-      gotFocusEvent = true;
+      state.focused = false;
+      state.gotFocusEvent = true;
       out += data.slice(last, i);
       last = i + 3;
       i += 2;
@@ -65,12 +74,6 @@ function tmuxFocused(): Promise<boolean | null> {
       resolve(v === "1" ? true : v === "0" ? false : null);
     });
   });
-}
-
-async function terminalFocused(): Promise<boolean | null> {
-  if (gotFocusEvent) return focused;
-  if (process.env.TMUX) return await tmuxFocused();
-  return null;
 }
 
 // ── delivery ─────────────────────────────────────────────────────────────
@@ -115,6 +118,16 @@ function sendNotify(body: string): void {
 // ── extension ────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI): void {
+  // Per-session state — see the note above. Never hoist these to module scope:
+  // in-process child sessions (subagents) would share them with the parent.
+  const focus = initialFocusState();
+  let focusEnabled = false; // DECSET 1004 active in the current session
+  let unsubscribeInput: (() => void) | undefined;
+  const terminalFocused = async (): Promise<boolean | null> => {
+    if (focus.gotFocusEvent) return focus.focused;
+    if (process.env.TMUX) return await tmuxFocused();
+    return null;
+  };
   let startMs = 0;
   let toolCalls = 0;
   let errors = 0;
@@ -129,7 +142,7 @@ export default function (pi: ExtensionAPI): void {
 
     try {
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
-        const out = scanFocusInput(data);
+        const out = scanFocusInput(data, focus);
         if (out === null) return { consume: true };
         return out === undefined ? undefined : { data: out };
       });
@@ -144,8 +157,7 @@ export default function (pi: ExtensionAPI): void {
     focusEnabled = false;
     unsubscribeInput?.();
     unsubscribeInput = undefined;
-    focused = true;
-    gotFocusEvent = false;
+    Object.assign(focus, initialFocusState());
     writeToTty(`${ESC}[?1004l`);
   };
   pi.on("session_shutdown", disableFocus);
@@ -195,7 +207,7 @@ export default function (pi: ExtensionAPI): void {
     description: "Report focus source, turn stats, and whether a ping would fire.",
     handler: async (_args, ctx) => {
       const f = await terminalFocused();
-      const source = gotFocusEvent ? "terminal-focus" : process.env.TMUX ? "tmux" : "unknown";
+      const source = focus.gotFocusEvent ? "terminal-focus" : process.env.TMUX ? "tmux" : "unknown";
       const dur = startMs ? Date.now() - startMs : 0;
       const would = f !== true && (toolCalls > 0 || errors > 0 || dur >= MIN_WORK_MS);
       const msg = `focus ${source}:${f ?? "?"} | tools=${toolCalls} errors=${errors} dur=${Math.round(dur / 1000)}s | would ${would ? "PING" : "silent"}`;
@@ -216,8 +228,9 @@ if (process.env.PI_NOTIFY_SELFTEST) {
     }
   };
 
+  const fs = initialFocusState();
   const t = (input: string, expected: string | null | undefined, label: string) => {
-    const got = scanFocusInput(input);
+    const got = scanFocusInput(input, fs);
     assert(got === expected, `${label}: got ${JSON.stringify(got)}, want ${JSON.stringify(expected)}`);
   };
 
@@ -227,9 +240,11 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   t(`a${ESC}[Ib`, "ab", "FocusIn stripped mid-stream");
   t(`${ESC}[Ix${ESC}[O`, "x", "both events stripped");
   t(`${ESC}[I${ESC}[O`, null, "only focus events fully consumed");
-  // Snapshot through a call so TS does not narrow the module-level `let` state.
-  const state = () => ({ focused, gotFocusEvent });
-  assert(state().focused === false, "focus state follows last event (FocusOut)");
-  assert(state().gotFocusEvent === true, "gotFocusEvent set");
+  assert(fs.focused === false, "focus state follows last event (FocusOut)");
+  assert(fs.gotFocusEvent === true, "gotFocusEvent set");
+  // Fresh sessions must not inherit focus state: the module instance is
+  // shared across in-process sessions, so state has to be per-factory-call.
+  const other = initialFocusState();
+  assert(other.focused === true && other.gotFocusEvent === false, "fresh session starts with clean focus state");
   console.log("all self-tests passed");
 }
