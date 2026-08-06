@@ -36,15 +36,20 @@ No wrapper scripts, no GNOME shell extensions, no external daemons.
    When a qualifying run settles, queries the terminal for its current window
    title (native XTWINOPS `CSI 21 t`; reply is `OSC l <title>`), then prepends
    `! ` to it via OSC 0 — **append-only**, so it decorates pi's own title
-   (`pi - <session> - <cwd>`) or whatever another extension set, never
+   (`π - <session> - <cwd>`) or whatever another extension set, never
    replacing it. The marker is removed at the next `agent_start`, but only
    when the title is exactly what we set, so a tab reads `!` precisely
    between *finished* and *working again*.
 
-   Works in terminals that answer the title query: `xterm`, `kitty`,
-   `WezTerm`, `Ghostty`, and inside `tmux` (which relays it). Terminals that
-   don't reply (e.g. `iTerm2`, Windows Terminal) are untouched — notifications
-   still work, the tab marker is simply skipped.
+   - Works in terminals that answer the title query: `xterm`, `kitty`,
+     `WezTerm`, `Ghostty` (see below), and inside `tmux` (which relays it).
+   - **Ghostty**: title reporting is **off by default** — add
+     `title-report = true` to `~/.config/ghostty/config` and restart, or the
+     marker is never set.
+   - Terminals that don't answer at all (e.g. `iTerm2`, Windows Terminal)
+     fall back to pi's own naming (`! π - <session> - <cwd>`) — the tradeoff
+     is that on those terminals a rename by another extension would be
+     replaced rather than decorated.
 
 ## Installation
 

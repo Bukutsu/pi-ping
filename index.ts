@@ -16,18 +16,21 @@
  *  5. Done marker: on the same qualifying settle, query the terminal for its
  *      current window title (XTWINOPS `CSI 21 t`, reply `OSC l <title> ST`),
  *      then prepend "! " via OSC 0 — append-only, so it decorates pi's own
- *      title (`pi - <session> - <cwd>`) or whatever another extension set,
- *      never replacing it. Not focus-gated (unlike the ping): the tab reads
- *      done whenever you glance at it. The marker is cleared at the next
- *      agent_start (only when it is exactly ours), so a tab reads "!"
+ *      title (`π - <session> - <cwd>`) or whatever another extension set,
+ *      never replacing it. Terminals that don't answer the query (e.g.
+ *      ghostty without `title-report = true`, iTerm2, Windows Terminal) fall
+ *      back to pi's own naming. Not focus-gated (unlike the ping): the tab
+ *      reads done whenever you glance at it. The marker is cleared at the
+ *      next agent_start (only when it is exactly ours), so a tab reads "!"
  *      precisely between "finished" and "working again".
  *
  * Delivery: OSC 99 (kitty) / OSC 9 (ghostty, iTerm, WezTerm, warp) / OSC 777,
  * plus notify-send fallback on Linux.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
+import { basename } from "node:path";
 import { openSync, writeSync, closeSync } from "node:fs";
 
 const MIN_WORK_MS = 10_000;
@@ -45,6 +48,22 @@ const DONE_MARKER = "! "; // prepended to the tab title while the run is done
  */
 export function sanitizeTitle(title: string): string {
   return title.replace(/[\x00-\x1f\x7f]/g, "");
+}
+
+/**
+ * Reconstruct pi's own tab-title format (mirrors interactive-mode
+ * `updateTerminalTitle`: `π - <session> - <cwd>`). Used only as a fallback
+ * when the terminal can't report its current title, so the marker still works
+ * on terminals without title reporting (e.g. ghostty without `title-report`).
+ * Stock pi uses "π"; renamed builds may differ — the query path is primary.
+ */
+export function piTabTitle(ctx: {
+  cwd: string;
+  sessionManager: { getSessionName(): string | undefined };
+}): string {
+  const base = basename(ctx.cwd);
+  const session = ctx.sessionManager.getSessionName();
+  return session ? `π - ${session} - ${base}` : `π - ${base}`;
 }
 
 // ── focus state ──────────────────────────────────────────────────────────
@@ -217,21 +236,38 @@ export default function (pi: ExtensionAPI): void {
   };
 
   /** Prepend the done marker to the current title; never replaces it. */
-  const markTitle = async (ui: { setTitle(title: string): void }): Promise<void> => {
+  const markTitle = async (ui: { setTitle(title: string): void }, ctx: ExtensionContext): Promise<void> => {
     const title = await queryTitle();
     if (runInProgress) return; // a new run started while we were querying
-    if (!title) return;
-    const clean = sanitizeTitle(title);
-    if (!clean || clean === markedTitle || clean === `${DONE_MARKER}${markedTitle}`) return;
-    markedTitle = clean;
-    ui.setTitle(`${DONE_MARKER}${clean}`);
+    if (title) {
+      // Query answered: decorate the actual title (pi's or another extension's).
+      const clean = sanitizeTitle(title);
+      if (!clean || clean === markedTitle || clean === `${DONE_MARKER}${markedTitle}`) return;
+      markedTitle = clean;
+      ui.setTitle(`${DONE_MARKER}${clean}`);
+      return;
+    }
+    // Terminal can't report its title: fall back to pi's own naming, which is
+    // the default tab title anyway. (Tradeoff: on such terminals the marker
+    // replaces, not decorates — a rename by another extension is lost.)
+    const fallback = sanitizeTitle(piTabTitle(ctx));
+    if (!fallback || fallback === markedTitle || fallback === `${DONE_MARKER}${markedTitle}`) return;
+    markedTitle = fallback;
+    ui.setTitle(`${DONE_MARKER}${fallback}`);
   };
 
-  /** Remove the marker, but only if the title is exactly ours. */
+  /** Remove the marker, but only when the title is still ours. */
   const unmarkTitle = async (ui: { setTitle(title: string): void }): Promise<void> => {
     if (!markedTitle) return;
     const title = await queryTitle();
-    if (title === `${DONE_MARKER}${markedTitle}`) ui.setTitle(markedTitle);
+    if (title === `${DONE_MARKER}${markedTitle}`) {
+      ui.setTitle(markedTitle);
+      return;
+    }
+    // Query answered with a different title: another extension owns it — leave
+    // it alone. Query unanswered: can't verify, but a stale "!" is worse, so
+    // restore the title we set (best effort; concurrent rename is rare).
+    if (title === null) ui.setTitle(markedTitle);
   };
   const terminalFocused = async (): Promise<boolean | null> => {
     if (focus.gotFocusEvent) return focus.focused;
@@ -329,7 +365,7 @@ export default function (pi: ExtensionAPI): void {
 
     // Done marker: independent of focus — the tab should read "!" whenever
     // you glance at the tab list, even if you were looking when it finished.
-    await markTitle(ctx.ui);
+    await markTitle(ctx.ui, ctx);
 
     if (focusedNow === true) return; // terminal is focused — you're looking
 
@@ -411,9 +447,16 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   rt(`y${ESC}]l${big}`, ts, "y", undefined, "oversized tail dropped, prefix passes");
   assert(ts.buf === "", "oversized tail not buffered");
 
-  // ── sanitizeTitle ──
+  // ── sanitizeTitle / piTabTitle ──
   assert(sanitizeTitle("pi - cwd") === "pi - cwd", "clean title untouched");
   assert(sanitizeTitle("a\x1b]2;evil\x07b") === "a]2;evilb", "control chars stripped (no OSC injection)");
   assert(sanitizeTitle("\x1b\x07\x00") === "", "fully control title emptied");
+  const fakeCtx = (name: string | undefined, cwd: string) => ({
+    cwd,
+    sessionManager: { getSessionName: () => name },
+  });
+  assert(piTabTitle(fakeCtx("my session", "/home/u/proj")) === "π - my session - proj", "fallback title with session");
+  assert(piTabTitle(fakeCtx(undefined, "/home/u/proj")) === "π - proj", "fallback title without session");
+  assert(piTabTitle(fakeCtx(undefined, "/")) === "π - ", "fallback title for root cwd (mirrors pi's own basename behavior)");
   console.log("all self-tests passed");
 }
