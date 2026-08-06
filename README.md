@@ -2,6 +2,8 @@
 
 A 100% pi-native notification extension for the [pi coding agent](https://pi.dev/).
 Pings only when a turn finishes, you are **not** looking at the terminal, and real work was done.
+It also marks the terminal tab as done (prepends `! ` to the tab title) while the finished
+run is the latest state.
 
 No wrapper scripts, no GNOME shell extensions, no external daemons.
 
@@ -30,6 +32,20 @@ No wrapper scripts, no GNOME shell extensions, no external daemons.
    - `OSC 777` for standard terminals
    - `notify-send` fallback on Linux
 
+5. **Done Tab Marker** (same gating as the ping):
+   When a qualifying run settles, queries the terminal for its current window
+   title (native XTWINOPS `CSI 21 t`; reply is `OSC l <title>`), then prepends
+   `! ` to it via OSC 0 — **append-only**, so it decorates pi's own title
+   (`pi - <session> - <cwd>`) or whatever another extension set, never
+   replacing it. The marker is removed at the next `agent_start`, but only
+   when the title is exactly what we set, so a tab reads `!` precisely
+   between *finished* and *working again*.
+
+   Works in terminals that answer the title query: `xterm`, `kitty`,
+   `WezTerm`, `Ghostty`, and inside `tmux` (which relays it). Terminals that
+   don't reply (e.g. `iTerm2`, Windows Terminal) are untouched — notifications
+   still work, the tab marker is simply skipped.
+
 ## Installation
 
 ```bash
@@ -45,3 +61,10 @@ cp ~/Projects/pi-ping/index.ts ~/.pi/agent/extensions/pi-ping.ts
 ## Commands
 
 - `/notify-check`: Check current focus state, turn stats, and whether a notification would trigger.
+
+## Testing
+
+```bash
+bun run typecheck   # tsc --strict against the pi extension API
+bun run test        # self-test: focus scanner + title-reply scanner
+```
