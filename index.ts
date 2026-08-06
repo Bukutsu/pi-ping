@@ -37,6 +37,16 @@ const TITLE_QUERY_TIMEOUT_MS = 250; // terminals that don't answer CSI 21 t stay
 const TITLE_BUF_CAP = 512; // safety cap for a fragmented title reply
 const DONE_MARKER = "! "; // prepended to the tab title while the run is done
 
+/**
+ * Strip control characters before embedding a title in OSC 0. Without this, a
+ * title containing ESC/BEL (e.g. a hostile repo directory name, or another
+ * extension's title) could terminate our OSC early and inject arbitrary
+ * escape sequences into the terminal (OSC 52 clipboard writes, etc.).
+ */
+export function sanitizeTitle(title: string): string {
+  return title.replace(/[\x00-\x1f\x7f]/g, "");
+}
+
 // ── focus state ──────────────────────────────────────────────────────────
 // NOTE: focus state must be per-session, not module-level. pi loads the
 // extension module once per cwd and reuses the same factory for in-process
@@ -167,6 +177,14 @@ function sendNotify(body: string): void {
 
 // ── extension ────────────────────────────────────────────────────────────
 
+// One process-wide exit hook; each session registers its teardown in this
+// shared Set so session switches and in-process subagents don't pile up
+// process listeners. (Shared on purpose, unlike the per-session state below.)
+const sessionTeardowns = new Set<() => void>();
+process.on("exit", () => {
+  for (const teardown of sessionTeardowns) teardown();
+});
+
 export default function (pi: ExtensionAPI): void {
   // Per-session state — see the note above. Never hoist these to module scope:
   // in-process child sessions (subagents) would share them with the parent.
@@ -189,6 +207,7 @@ export default function (pi: ExtensionAPI): void {
         done = true;
         clearTimeout(timer);
         pendingTitle = undefined;
+        titleScan.buf = ""; // drop any partial reply left over from this query
         resolve(t);
       };
       const timer = setTimeout(() => finish(null), TITLE_QUERY_TIMEOUT_MS);
@@ -201,9 +220,11 @@ export default function (pi: ExtensionAPI): void {
   const markTitle = async (ui: { setTitle(title: string): void }): Promise<void> => {
     const title = await queryTitle();
     if (runInProgress) return; // a new run started while we were querying
-    if (!title || title === markedTitle || title === `${DONE_MARKER}${markedTitle}`) return;
-    markedTitle = title;
-    ui.setTitle(`${DONE_MARKER}${title}`);
+    if (!title) return;
+    const clean = sanitizeTitle(title);
+    if (!clean || clean === markedTitle || clean === `${DONE_MARKER}${markedTitle}`) return;
+    markedTitle = clean;
+    ui.setTitle(`${DONE_MARKER}${clean}`);
   };
 
   /** Remove the marker, but only if the title is exactly ours. */
@@ -258,8 +279,11 @@ export default function (pi: ExtensionAPI): void {
     Object.assign(focus, initialFocusState());
     writeToTty(`${ESC}[?1004l`);
   };
-  pi.on("session_shutdown", disableFocus);
-  process.on("exit", disableFocus);
+  pi.on("session_shutdown", () => {
+    sessionTeardowns.delete(disableFocus);
+    disableFocus();
+  });
+  sessionTeardowns.add(disableFocus);
 
   pi.on("agent_start", (_event, ctx) => {
     runInProgress = true;
@@ -296,6 +320,9 @@ export default function (pi: ExtensionAPI): void {
     if (lastStopReason === "aborted") return; // turn was aborted
     if (toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
 
+    // Only a qualifying settle clears runInProgress: a trivial/aborted settle
+    // must leave it true so a stale markTitle() continuation from the previous
+    // run can't land mid-way through this one.
     runInProgress = false;
 
     const focusedNow = await terminalFocused();
@@ -380,5 +407,13 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   assert(ts.buf === `${ESC}]lT`, "incomplete tail held in buffer");
   rt(`\x07`, ts, null, "T", "terminator in next chunk completes reply");
   assert(ts.buf === "", "buffer drained after completion");
+  const big = "z".repeat(600);
+  rt(`y${ESC}]l${big}`, ts, "y", undefined, "oversized tail dropped, prefix passes");
+  assert(ts.buf === "", "oversized tail not buffered");
+
+  // ── sanitizeTitle ──
+  assert(sanitizeTitle("pi - cwd") === "pi - cwd", "clean title untouched");
+  assert(sanitizeTitle("a\x1b]2;evil\x07b") === "a]2;evilb", "control chars stripped (no OSC injection)");
+  assert(sanitizeTitle("\x1b\x07\x00") === "", "fully control title emptied");
   console.log("all self-tests passed");
 }
