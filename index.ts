@@ -19,10 +19,10 @@
  *      title (`π - <session> - <cwd>`) or whatever another extension set,
  *      never replacing it. Terminals that don't answer the query (e.g.
  *      ghostty without `title-report = true`, iTerm2, Windows Terminal) fall
- *      back to pi's own naming. Not focus-gated (unlike the ping): the tab
- *      reads done whenever you glance at it. The marker is cleared at the
- *      next agent_start (only when it is exactly ours), so a tab reads "!"
- *      precisely between "finished" and "working again".
+ *      back to pi's own naming. Same focus gate as the ping: marked only
+ *      while you're NOT looking, and cleared the moment the tab gains focus
+ *      (FocusIn) or a new run starts — the tab reads "!" precisely between
+ *      "finished", "unwatched", and "working again".
  *
  * Delivery: OSC 99 (kitty) / OSC 9 (ghostty, iTerm, WezTerm, warp) / OSC 777,
  * plus notify-send fallback on Linux.
@@ -214,6 +214,7 @@ export default function (pi: ExtensionAPI): void {
   const titleScan: TitleScanState = { buf: "" };
   let pendingTitle: ((title: string | null) => void) | undefined;
   let markedTitle: string | undefined; // original title we decorated with DONE_MARKER
+  let markerActive = false; // the tab title currently carries our marker
   let runInProgress = false; // agent_start fired, no settle since
 
   /** Ask the terminal for its current window title (native XTWINOPS query). */
@@ -239,12 +240,17 @@ export default function (pi: ExtensionAPI): void {
   const markTitle = async (ui: { setTitle(title: string): void }, ctx: ExtensionContext): Promise<void> => {
     const title = await queryTitle();
     if (runInProgress) return; // a new run started while we were querying
+    // The user may have focused the tab during the query — then they're
+    // looking, and the marker must not appear (it would only be cleared
+    // again by the FocusIn handler below).
+    if (focus.gotFocusEvent && focus.focused) return;
     if (title) {
       // Query answered: decorate the actual title (pi's or another extension's).
       const clean = sanitizeTitle(title);
       if (!clean || clean === markedTitle || clean === `${DONE_MARKER}${markedTitle}`) return;
       markedTitle = clean;
       ui.setTitle(`${DONE_MARKER}${clean}`);
+      markerActive = true;
       return;
     }
     // Terminal can't report its title: fall back to pi's own naming, which is
@@ -254,20 +260,23 @@ export default function (pi: ExtensionAPI): void {
     if (!fallback || fallback === markedTitle || fallback === `${DONE_MARKER}${markedTitle}`) return;
     markedTitle = fallback;
     ui.setTitle(`${DONE_MARKER}${fallback}`);
+    markerActive = true;
   };
 
   /** Remove the marker, but only when the title is still ours. */
   const unmarkTitle = async (ui: { setTitle(title: string): void }): Promise<void> => {
-    if (!markedTitle) return;
+    if (!markerActive || !markedTitle) return;
     const title = await queryTitle();
     if (title === `${DONE_MARKER}${markedTitle}`) {
       ui.setTitle(markedTitle);
-      return;
+    } else if (title === null) {
+      // Query unanswered: can't verify, but a stale "!" is worse, so restore
+      // the title we set (best effort; concurrent rename is rare).
+      ui.setTitle(markedTitle);
     }
-    // Query answered with a different title: another extension owns it — leave
-    // it alone. Query unanswered: can't verify, but a stale "!" is worse, so
-    // restore the title we set (best effort; concurrent rename is rare).
-    if (title === null) ui.setTitle(markedTitle);
+    // Query answered with a different title: another extension owns it — the
+    // marker is gone either way, so stop trying to clear it.
+    markerActive = false;
   };
   const terminalFocused = async (): Promise<boolean | null> => {
     if (focus.gotFocusEvent) return focus.focused;
@@ -288,6 +297,7 @@ export default function (pi: ExtensionAPI): void {
 
     try {
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
+        const wasFocused = focus.focused;
         let out = scanFocusInput(data, focus);
         if (out !== null) {
           // A title reply can arrive interleaved with focus events.
@@ -295,6 +305,10 @@ export default function (pi: ExtensionAPI): void {
             ? scanTitleReply(out ?? data, titleScan, (t) => pendingTitle?.(t))
             : undefined;
           if (titleOut !== undefined) out = titleOut;
+        }
+        // The tab just became focused: the user is looking — drop the marker.
+        if (!wasFocused && focus.focused && markerActive) {
+          void unmarkTitle(ctx.ui);
         }
         if (out === null) return { consume: true };
         return out === undefined ? undefined : { data: out };
@@ -362,11 +376,6 @@ export default function (pi: ExtensionAPI): void {
     runInProgress = false;
 
     const focusedNow = await terminalFocused();
-
-    // Done marker: independent of focus — the tab should read "!" whenever
-    // you glance at the tab list, even if you were looking when it finished.
-    await markTitle(ctx.ui, ctx);
-
     if (focusedNow === true) return; // terminal is focused — you're looking
 
     const parts = [];
@@ -374,6 +383,10 @@ export default function (pi: ExtensionAPI): void {
     if (errors > 0) parts.push(`${errors} errors`);
     if (dur >= 1000) parts.push(`${Math.round(dur / 1000)}s`);
     sendNotify(parts.join(", ") || "done");
+
+    // Done marker: only while you're NOT looking — it clears as soon as the
+    // tab gains focus (FocusIn in the input handler above).
+    await markTitle(ctx.ui, ctx);
   });
 
   pi.registerCommand("notify-check", {

@@ -33,13 +33,15 @@ No wrapper scripts, no GNOME shell extensions, no external daemons.
    - `notify-send` fallback on Linux
 
 5. **Done Tab Marker** (same gating as the ping):
-   When a qualifying run settles, queries the terminal for its current window
-   title (native XTWINOPS `CSI 21 t`; reply is `OSC l <title>`), then prepends
-   `! ` to it via OSC 0 — **append-only**, so it decorates pi's own title
+   When a qualifying run settles **and the terminal is unfocused**, queries
+   the terminal for its current window title (native XTWINOPS `CSI 21 t`;
+   reply is `OSC l <title>`), then prepends `! ` to it via OSC 0 —
+   **append-only**, so it decorates pi's own title
    (`π - <session> - <cwd>`) or whatever another extension set, never
-   replacing it. The marker is removed at the next `agent_start`, but only
-   when the title is exactly what we set, so a tab reads `!` precisely
-   between *finished* and *working again*.
+   replacing it. The moment the tab gains focus (FocusIn) — or a new run
+   starts — the marker is cleared, but only when the title is exactly what
+   we set. So a tab reads `!` only while the run is done *and* you're not
+   looking at it.
 
    - Works in terminals that answer the title query: `xterm`, `kitty`,
      `WezTerm`, `Ghostty` (see below), and inside `tmux` (which relays it).
