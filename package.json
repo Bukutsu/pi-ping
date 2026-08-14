@@ -1,6 +1,6 @@
 {
   "name": "@bukutsu/pi-ping",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Pi coding agent notification extension — pings only when unfocused and on real work",
   "type": "module",
   "repository": {

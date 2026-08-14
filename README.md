@@ -24,7 +24,7 @@ The tab marker is temporary. It appears only while the run is finished and the t
 
 You probably do not need Pi-ping if you keep Pi visible, want a bell after every turn, or already have a notification extension that does exactly what you want.
 
-Pi-ping is also not a general approval or question-alert system. It reports qualifying completed runs. It does not add click-to-focus actions, a desktop notification service, or a required background daemon.
+Pi-ping is also not a general approval or question-alert system. It reports qualifying completed runs. It does not add click-to-focus actions or install a separate desktop notification service or background daemon.
 
 ## What it does
 
@@ -57,6 +57,13 @@ title-report = true
 
 Terminals that do not answer the title query, such as iTerm2 and Windows Terminal, fall back to Pi's own title format.
 
+## Requirements and limits
+
+- Pi-ping runs only in Pi's interactive TUI mode.
+- Focus detection depends on terminal focus reporting or tmux. Without either, Pi-ping falls back to turn duration, tool calls, and errors.
+- Native terminal notifications depend on terminal support. On Linux, unknown terminals can use `notify-send` when it is installed.
+- Extensions run with the permissions of Pi. Review the source before installing packages you do not trust.
+
 ## Installation
 
 From npm:
@@ -70,6 +77,8 @@ From GitHub:
 ```bash
 pi install git:github.com/Bukutsu/pi-ping
 ```
+
+After installing, restart Pi or run `/reload` in an existing session.
 
 ## Commands
 
