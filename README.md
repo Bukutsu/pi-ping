@@ -71,12 +71,6 @@ From GitHub:
 pi install git:github.com/Bukutsu/pi-ping
 ```
 
-Or copy the file directly:
-
-```bash
-cp ~/Projects/pi-ping/index.ts ~/.pi/agent/extensions/pi-ping.ts
-```
-
 ## Commands
 
 - `/notify-check`: Check the current focus source, turn statistics, and whether a notification would trigger.
