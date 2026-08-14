@@ -3,6 +3,25 @@
   "version": "1.0.0",
   "description": "Pi coding agent notification extension — pings only when unfocused and on real work",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bukutsu/pi-ping.git"
+  },
+  "homepage": "https://github.com/Bukutsu/pi-ping#readme",
+  "bugs": {
+    "url": "https://github.com/Bukutsu/pi-ping/issues"
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "test": "PI_NOTIFY_SELFTEST=1 bun index.ts",
     "typecheck": "bunx tsc --noEmit --strict --skipLibCheck index.ts"
@@ -12,7 +31,10 @@
     "pi-extension",
     "pi-coding-agent",
     "notification",
-    "terminal-focus"
+    "terminal-focus",
+    "focus-aware",
+    "terminal-notification",
+    "desktop-notification"
   ],
   "license": "MIT",
   "peerDependencies": {

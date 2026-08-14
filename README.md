@@ -1,62 +1,74 @@
 # pi-ping
 
-A 100% pi-native notification extension for the [pi coding agent](https://pi.dev/).
-Pings only when a turn finishes, you are **not** looking at the terminal, and real work was done.
-It also marks the terminal tab as done (prepends `! ` to the tab title) while the finished
-run is the latest state.
+A notification extension for the [pi coding agent](https://pi.dev/). It tells you when a useful Pi run has finished while you are looking somewhere else.
 
-No wrapper scripts, no GNOME shell extensions, no external daemons.
+Pi-ping waits for the run to fully settle, ignores trivial and aborted turns, and uses terminal focus when it can detect it. When a qualifying run finishes away from the terminal, it sends a native terminal notification and adds `! ` to the tab title.
 
-## How it works
+Repository: <https://github.com/Bukutsu/pi-ping>
 
-1. **Terminal Focus via DECSET 1004**:
-   On session start, enables DECSET 1004 focus reporting.
-   Listens to raw input via `ctx.ui.onTerminalInput`, catching `FocusIn` (`ESC [ I`) and `FocusOut` (`ESC [ O`), and consuming them before pi's TUI parser sees them.
+## Why use it?
 
-2. **Anti-Spam & Smart Gating**:
-   - **Trivial turns**: Skips turns <10s with no tool calls and no errors.
-   - **Aborted turns**: Skips when you hit Escape.
-   - **Focused terminal**: Stays completely silent when you are looking.
-   - **Fully settled**: Pings on `agent_settled`, so auto-retries, compaction retries, and queued follow-ups finish before the ping fires.
-   - **Interrupted runs**: Runs killed mid-flight (no `agent_end` ever fired) stay silent — no "done" ping for work that never finished.
+Pi is useful when you can leave it alone for a while. The problem is knowing when it is worth coming back to the terminal.
 
-3. **Fallback Ladder**:
-   - Primary: Terminal focus reporting (`Ghostty`, `kitty`, `iTerm2`, `WezTerm`, etc.)
-   - Secondary: `tmux` (`window_focused`) if running in `tmux`
-   - Fallback: Heuristic gating (duration + tool calls + errors) if focus reporting is unsupported
+Pi-ping is for you if you:
 
-4. **Multi-Protocol Delivery**:
-   Sends native escape notifications based on terminal:
-   - `OSC 99` for `kitty`
-   - `OSC 9` for `Ghostty`, `iTerm2`, `WezTerm`, `Warp`
-   - `OSC 777` for standard terminals
-   - `notify-send` fallback on Linux
+- switch to another window while Pi works;
+- run Pi in more than one terminal tab;
+- want one notification after the whole run finishes, not during an automatic retry or compaction;
+- want quick, no-tool turns to stay quiet; or
+- want the finished tab to be easy to spot without renaming it permanently.
 
-5. **Done Tab Marker** (same gating as the ping):
-   When a qualifying run settles **and the terminal is unfocused**, queries
-   the terminal for its current window title (native XTWINOPS `CSI 21 t`;
-   reply is `OSC l <title>`), then prepends `! ` to it via OSC 0 —
-   **append-only**, so it decorates pi's own title
-   (`π - <session> - <cwd>`) or whatever another extension set, never
-   replacing it. The moment the tab gains focus (FocusIn) — or a new run
-   starts — the marker is cleared, but only when the title is exactly what
-   we set. So a tab reads `!` only while the run is done *and* you're not
-   looking at it.
+The tab marker is temporary. It appears only while the run is finished and the terminal is unfocused. It disappears when you look at the tab or start another run.
 
-   - Works in terminals that answer the title query: `xterm`, `kitty`,
-     `WezTerm`, `Ghostty` (see below), and inside `tmux` (which relays it).
-   - **Ghostty**: title reporting is **off by default** — add
-     `title-report = true` to `~/.config/ghostty/config` and restart, or the
-     marker is never set.
-   - Terminals that don't answer at all (e.g. `iTerm2`, Windows Terminal)
-     fall back to pi's own naming (`! π - <session> - <cwd>`) — the tradeoff
-     is that on those terminals a rename by another extension would be
-     replaced rather than decorated.
+## When you do not need it
+
+You probably do not need Pi-ping if you keep Pi visible, want a bell after every turn, or already have a notification extension that does exactly what you want.
+
+Pi-ping is also not a general approval or question-alert system. It reports qualifying completed runs. It does not add click-to-focus actions, a desktop notification service, or a required background daemon.
+
+## What it does
+
+### Decides when to notify
+
+- Skips turns shorter than 10 seconds when they had no tool calls or errors.
+- Skips aborted turns.
+- Waits for `agent_settled`, so automatic retries, compaction retries, and queued follow-ups finish first.
+- Stays silent for interrupted runs where no `agent_end` event was received.
+- Uses terminal focus reporting first, tmux window focus second, and a work-based heuristic when neither is available.
+
+### Sends native terminal notifications
+
+- `OSC 99` for kitty
+- `OSC 9` for Ghostty, iTerm2, WezTerm, and Warp
+- `OSC 777` for other terminals that support it
+- `notify-send` as a Linux fallback when the terminal does not provide native notifications
+
+No wrapper scripts, GNOME extensions, or external daemons are required.
+
+### Marks the finished tab
+
+When the terminal is unfocused, pi-ping asks for the current title and prepends `! `. It decorates the existing title instead of replacing it when the terminal supports title reporting. The marker is cleared when the tab gains focus or a new run starts.
+
+The title marker works in terminals that answer the title query, including xterm, kitty, WezTerm, Ghostty, and tmux. Ghostty requires this setting:
+
+```ini
+title-report = true
+```
+
+Terminals that do not answer the title query, such as iTerm2 and Windows Terminal, fall back to Pi's own title format.
 
 ## Installation
 
+From npm:
+
 ```bash
-pi install ~/Projects/pi-ping        # registered as a local package
+pi install npm:@bukutsu/pi-ping
+```
+
+From a local checkout:
+
+```bash
+pi install ~/Projects/pi-ping
 ```
 
 Or copy the file directly:
@@ -67,11 +79,11 @@ cp ~/Projects/pi-ping/index.ts ~/.pi/agent/extensions/pi-ping.ts
 
 ## Commands
 
-- `/notify-check`: Check current focus state, turn stats, and whether a notification would trigger.
+- `/notify-check`: Check the current focus source, turn statistics, and whether a notification would trigger.
 
 ## Testing
 
 ```bash
 bun run typecheck   # tsc --strict against the pi extension API
-bun run test        # self-test: focus scanner + title-reply scanner
+bun run test        # self-test: focus scanner and title-reply scanner
 ```
