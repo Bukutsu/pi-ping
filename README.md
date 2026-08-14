@@ -65,10 +65,10 @@ From npm:
 pi install npm:@bukutsu/pi-ping
 ```
 
-From a local checkout:
+From GitHub:
 
 ```bash
-pi install ~/Projects/pi-ping
+pi install git:github.com/Bukutsu/pi-ping
 ```
 
 Or copy the file directly:
