@@ -39,7 +39,7 @@ const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
 const ESC = "\x1b";
 const TITLE_QUERY_TIMEOUT_MS = 250; // terminals that don't answer CSI 21 t stay silent
 const TITLE_BUF_CAP = 512; // safety cap for a fragmented title reply
-const DONE_MARKER = process.env.PI_PING_MARKER ?? "● "; // prepended to the tab title while the run is done
+const DONE_MARKER = process.env.PI_PING_MARKER ?? "[!] "; // prepended to the tab title while the run is done
 
 /**
  * Strip control characters before embedding a title in OSC 0. Without this, a

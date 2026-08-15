@@ -2,7 +2,7 @@
 
 A focus-aware notification extension for the [pi coding agent](https://pi.dev/). It alerts you when a Pi run finishes while you are working in another window.
 
-Pi-ping waits until the turn settles completely, skips trivial answers and aborted runs, and uses terminal focus detection to stay quiet when you are already watching the terminal. When a qualifying run finishes in the background, it sends a native terminal notification and prepends `● ` (or custom `PI_PING_MARKER`) to the tab title until you switch back.
+Pi-ping waits until the turn settles completely, skips trivial answers and aborted runs, and uses terminal focus detection to stay quiet when you are already watching the terminal. When a qualifying run finishes in the background, it sends a native terminal notification and prepends `[!] ` (or custom `PI_PING_MARKER`) to the tab title until you switch back.
 
 Repository: <https://github.com/Bukutsu/pi-ping>
 
@@ -17,7 +17,7 @@ Repository: <https://github.com/Bukutsu/pi-ping>
 
 3. The entire run finishes:
    Notification: "Pi: 3 tool calls, 24s"
-   Tab title:    "● π - fix-auth - project"
+   Tab title:    "[!] π - fix-auth - project"
 
 4. You click back to the terminal:
    The tab title immediately returns to:
@@ -35,7 +35,7 @@ Most notification extensions either ping on every single message or rely on exte
 | Quick reply with no tool calls | Sends a notification | Stays silent (<10s, 0 tool calls, 0 errors) |
 | Auto-retry or context compaction | Pings on every intermediate step | Pings once after `agent_settled` fires |
 | Prompt cancelled with Escape | Often fires a false completion alert | Stays silent |
-| Spotting finished tabs | Renames tab permanently or does nothing | Adds temporary `● ` prefix, clears on focus |
+| Spotting finished tabs | Renames tab permanently or does nothing | Adds temporary `[!] ` prefix, clears on focus |
 | Setup requirements | Background daemons or extra packages | Native ANSI escape sequences only |
 
 ## When you do not need it
@@ -66,7 +66,7 @@ Skip pi-ping if:
 
 ### Tab title markers
 
-When Pi finishes in an unfocused window, pi-ping queries the current terminal title with `CSI 21 t` and prepends `● ` (configurable via `PI_PING_MARKER`, e.g. `export PI_PING_MARKER="[!] "`).
+When Pi finishes in an unfocused window, pi-ping queries the current terminal title with `CSI 21 t` and prepends `[!] ` (configurable via `PI_PING_MARKER`, e.g. `export PI_PING_MARKER="(!) "`).
 
 - It decorates the active title rather than replacing it.
 - It clears automatically as soon as the tab receives focus or a new run starts.
