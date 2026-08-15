@@ -34,11 +34,12 @@ import { basename } from "node:path";
 import { appendFileSync } from "node:fs";
 
 const MIN_WORK_MS = 10_000;
+const MIN_AWAY_MS = 3_000;
 const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
 const ESC = "\x1b";
 const TITLE_QUERY_TIMEOUT_MS = 250; // terminals that don't answer CSI 21 t stay silent
 const TITLE_BUF_CAP = 512; // safety cap for a fragmented title reply
-const DONE_MARKER = "! "; // prepended to the tab title while the run is done
+const DONE_MARKER = process.env.PI_PING_MARKER ?? "● "; // prepended to the tab title while the run is done
 
 /**
  * Strip control characters before embedding a title in OSC 0. Without this, a
@@ -75,26 +76,34 @@ export function piTabTitle(ctx: {
 // and tear down the parent's focus tracking. Keep this state inside the
 // factory closure below.
 
-export type FocusState = { focused: boolean; gotFocusEvent: boolean };
+export type FocusState = {
+  focused: boolean;
+  gotFocusEvent: boolean;
+  unfocusedAt?: number;
+};
 
 /** Fresh per-session focus state: assume focused until a focus event says otherwise (matches Codex). */
 export function initialFocusState(): FocusState {
-  return { focused: true, gotFocusEvent: false };
+  return { focused: true, gotFocusEvent: false, unfocusedAt: undefined };
 }
 
 /** Strip FocusIn/FocusOut from raw input, updating `state`.
  *  Returns null when fully consumed, the stripped string, or undefined if unchanged. */
-export function scanFocusInput(data: string, state: FocusState): string | null | undefined {
+export function scanFocusInput(data: string, state: FocusState, now = Date.now()): string | null | undefined {
   let out = "";
   let last = 0;
   for (let i = 0; i < data.length; i++) {
     if (data.startsWith(`${ESC}[I`, i)) {
       state.focused = true;
       state.gotFocusEvent = true;
+      state.unfocusedAt = undefined;
       out += data.slice(last, i);
       last = i + 3;
       i += 2;
     } else if (data.startsWith(`${ESC}[O`, i)) {
+      if (state.focused || state.unfocusedAt === undefined) {
+        state.unfocusedAt = now;
+      }
       state.focused = false;
       state.gotFocusEvent = true;
       out += data.slice(last, i);
@@ -165,16 +174,17 @@ function writeToTty(data: string): void {
   }
 }
 
-function sendNotify(body: string): void {
+function sendNotify(body: string, title = "Pi"): void {
   let seq: string;
   let terminalNotifies = true;
   if (process.env.KITTY_WINDOW_ID) {
-    seq = `${ESC}]99;i=1:d=0;Pi${ESC}\\${ESC}]99;i=1:p=body;${body}${ESC}\\`;
+    const id = Date.now();
+    seq = `${ESC}]99;i=${id}:d=0;${title}${ESC}\\${ESC}]99;i=${id}:p=body;${body}${ESC}\\`;
   } else if (OSC9_TERMS.has(process.env.TERM_PROGRAM ?? "")) {
-    seq = `${ESC}]9;Pi: ${body}\x07`;
+    seq = `${ESC}]9;${title}: ${body}\x07`;
   } else {
     // Unknown terminal: OSC 777 may render nothing, so notify-send below covers it.
-    seq = `${ESC}]777;notify;Pi;${body}\x07`;
+    seq = `${ESC}]777;notify;${title};${body}\x07`;
     terminalNotifies = false;
   }
   if (process.env.TMUX) seq = `${ESC}Ptmux;${seq.replaceAll(ESC, ESC + ESC)}${ESC}\\`;
@@ -185,7 +195,7 @@ function sendNotify(body: string): void {
   // natively. Terminals we send OSC 99/9 to show the notification themselves;
   // notify-send on top of that would duplicate it.
   if (process.platform === "linux" && !terminalNotifies) {
-    execFile("notify-send", ["-a", "Pi", "Pi", body], () => {});
+    execFile("notify-send", ["-a", "Pi", title, body], () => {});
   }
 }
 
@@ -211,6 +221,14 @@ export default function (pi: ExtensionAPI): void {
   let markedTitle: string | undefined; // original title we decorated with DONE_MARKER
   let markerActive = false; // the tab title currently carries our marker
   let runInProgress = false; // agent_start fired, no settle since
+  let pendingNotifyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const cancelPendingNotify = () => {
+    if (pendingNotifyTimer) {
+      clearTimeout(pendingNotifyTimer);
+      pendingNotifyTimer = undefined;
+    }
+  };
 
   /** Ask the terminal for its current window title (native XTWINOPS query). */
   const queryTitle = (): Promise<string | null> => {
@@ -242,7 +260,7 @@ export default function (pi: ExtensionAPI): void {
     if (title) {
       // Query answered: decorate the actual title (pi's or another extension's).
       const clean = sanitizeTitle(title);
-      if (!clean || clean === markedTitle || clean === `${DONE_MARKER}${markedTitle}`) return;
+      if (!clean || clean === markedTitle || clean.startsWith(DONE_MARKER)) return;
       markedTitle = clean;
       ui.setTitle(`${DONE_MARKER}${clean}`);
       markerActive = true;
@@ -252,7 +270,7 @@ export default function (pi: ExtensionAPI): void {
     // the default tab title anyway. (Tradeoff: on such terminals the marker
     // replaces, not decorates — a rename by another extension is lost.)
     const fallback = sanitizeTitle(piTabTitle(ctx));
-    if (!fallback || fallback === markedTitle || fallback === `${DONE_MARKER}${markedTitle}`) return;
+    if (!fallback || fallback === markedTitle || fallback.startsWith(DONE_MARKER)) return;
     markedTitle = fallback;
     ui.setTitle(`${DONE_MARKER}${fallback}`);
     markerActive = true;
@@ -262,10 +280,10 @@ export default function (pi: ExtensionAPI): void {
   const unmarkTitle = async (ui: { setTitle(title: string): void }): Promise<void> => {
     if (!markerActive || !markedTitle) return;
     const title = await queryTitle();
-    if (title === `${DONE_MARKER}${markedTitle}`) {
-      ui.setTitle(markedTitle);
+    if (title && title.startsWith(DONE_MARKER)) {
+      ui.setTitle(title.slice(DONE_MARKER.length));
     } else if (title === null) {
-      // Query unanswered: can't verify, but a stale "!" is worse, so restore
+      // Query unanswered: can't verify, but a stale marker is worse, so restore
       // the title we set (best effort; concurrent rename is rare).
       ui.setTitle(markedTitle);
     }
@@ -301,9 +319,12 @@ export default function (pi: ExtensionAPI): void {
             : undefined;
           if (titleOut !== undefined) out = titleOut;
         }
-        // The tab just became focused: the user is looking — drop the marker.
-        if (!wasFocused && focus.focused && markerActive) {
-          void unmarkTitle(ctx.ui);
+        // The tab just became focused: user is looking — cancel pending alert and drop marker.
+        if (!wasFocused && focus.focused) {
+          cancelPendingNotify();
+          if (markerActive) {
+            void unmarkTitle(ctx.ui);
+          }
         }
         if (out === null) return { consume: true };
         return out === undefined ? undefined : { data: out };
@@ -315,6 +336,7 @@ export default function (pi: ExtensionAPI): void {
 
   // Session-scoped teardown: idempotent, and resets state for the next session.
   const disableFocus = () => {
+    cancelPendingNotify();
     if (!focusEnabled && !unsubscribeInput) return;
     focusEnabled = false;
     unsubscribeInput?.();
@@ -331,6 +353,7 @@ export default function (pi: ExtensionAPI): void {
   sessionTeardowns.add(disableFocus);
 
   pi.on("agent_start", (_event, ctx) => {
+    cancelPendingNotify();
     runInProgress = true;
     startMs = Date.now();
     toolCalls = 0;
@@ -373,15 +396,38 @@ export default function (pi: ExtensionAPI): void {
     const focusedNow = await terminalFocused();
     if (focusedNow === true) return; // terminal is focused — you're looking
 
+    const isError = lastStopReason === "error";
     const parts = [];
-    if (toolCalls > 0) parts.push(`${toolCalls} tool calls`);
-    if (errors > 0) parts.push(`${errors} errors`);
+    if (toolCalls > 0) parts.push(`${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`);
+    if (errors > 0) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
     if (dur >= 1000) parts.push(`${Math.round(dur / 1000)}s`);
-    sendNotify(parts.join(", ") || "done");
+    const body = parts.join(", ") || (isError ? "error" : "done");
+    const title = isError ? "Pi (error)" : "Pi";
 
-    // Done marker: only while you're NOT looking — it clears as soon as the
-    // tab gains focus (FocusIn in the input handler above).
-    await markTitle(ctx.ui, ctx);
+    const deliver = async () => {
+      sendNotify(body, title);
+      // Done marker: only while you're NOT looking — it clears as soon as the
+      // tab gains focus (FocusIn in the input handler above).
+      await markTitle(ctx.ui, ctx);
+    };
+
+    // If we have continuous focus tracking, require at least MIN_AWAY_MS of
+    // unfocused time before alerting so quick window switches stay quiet.
+    if (focus.gotFocusEvent && focus.unfocusedAt !== undefined) {
+      const awayMs = Date.now() - focus.unfocusedAt;
+      if (awayMs < MIN_AWAY_MS) {
+        cancelPendingNotify();
+        pendingNotifyTimer = setTimeout(() => {
+          pendingNotifyTimer = undefined;
+          if (focus.gotFocusEvent && !focus.focused && !runInProgress) {
+            void deliver();
+          }
+        }, MIN_AWAY_MS - awayMs);
+        return;
+      }
+    }
+
+    await deliver();
   });
 
   pi.registerCommand("notify-check", {
@@ -390,9 +436,19 @@ export default function (pi: ExtensionAPI): void {
       const f = await terminalFocused();
       const source = focus.gotFocusEvent ? "terminal-focus" : process.env.TMUX ? "tmux" : "unknown";
       const dur = startMs ? Date.now() - startMs : 0;
+      const away = focus.unfocusedAt ? `${Math.round((Date.now() - focus.unfocusedAt) / 1000)}s` : "n/a";
+      const focusStr = f === true ? "focused" : f === false ? `unfocused (away ${away})` : "?";
       const would = f !== true && (toolCalls > 0 || errors > 0 || dur >= MIN_WORK_MS);
-      const msg = `focus ${source}:${f ?? "?"} | tools=${toolCalls} errors=${errors} dur=${Math.round(dur / 1000)}s | would ${would ? "PING" : "silent"}`;
+      const msg = `focus ${source}:${focusStr} | tools=${toolCalls} errors=${errors} dur=${Math.round(dur / 1000)}s | would ${would ? "PING" : "silent"}`;
       ctx.ui.notify(msg, "info");
+    },
+  });
+
+  pi.registerCommand("notify-test", {
+    description: "Send an immediate test notification.",
+    handler: async (_args, ctx) => {
+      sendNotify("Desktop and terminal notifications are working.", "Pi (test)");
+      ctx.ui.notify("Test notification sent.", "info");
     },
   });
 }
@@ -423,6 +479,15 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   t(`${ESC}[I${ESC}[O`, null, "only focus events fully consumed");
   assert(fs.focused === false, "focus state follows last event (FocusOut)");
   assert(fs.gotFocusEvent === true, "gotFocusEvent set");
+
+  const fs2 = initialFocusState();
+  scanFocusInput(`${ESC}[O`, fs2, 1000);
+  assert(fs2.focused === false && fs2.unfocusedAt === 1000, "FocusOut sets unfocusedAt timestamp");
+  scanFocusInput(`${ESC}[O`, fs2, 2000);
+  assert(fs2.unfocusedAt === 1000, "consecutive FocusOut preserves original unfocusedAt timestamp");
+  scanFocusInput(`${ESC}[I`, fs2, 3000);
+  assert(fs2.focused === true && fs2.unfocusedAt === undefined, "FocusIn resets unfocusedAt timestamp");
+
   // Fresh sessions must not inherit focus state: the module instance is
   // shared across in-process sessions, so state has to be per-factory-call.
   const other = initialFocusState();
