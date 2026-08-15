@@ -31,7 +31,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
-import { openSync, writeSync, closeSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 
 const MIN_WORK_MS = 10_000;
 const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
@@ -159,12 +159,7 @@ function tmuxFocused(): Promise<boolean | null> {
 
 function writeToTty(data: string): void {
   try {
-    const fd = openSync("/dev/tty", "w");
-    try {
-      writeSync(fd, data);
-    } finally {
-      closeSync(fd);
-    }
+    appendFileSync("/dev/tty", data);
   } catch {
     process.stdout.write(data);
   }
@@ -182,7 +177,7 @@ function sendNotify(body: string): void {
     seq = `${ESC}]777;notify;Pi;${body}\x07`;
     terminalNotifies = false;
   }
-  if (process.env.TMUX) seq = `${ESC}Ptmux;${seq.split(ESC).join(ESC + ESC)}${ESC}\\`;
+  if (process.env.TMUX) seq = `${ESC}Ptmux;${seq.replaceAll(ESC, ESC + ESC)}${ESC}\\`;
 
   writeToTty(seq);
 
