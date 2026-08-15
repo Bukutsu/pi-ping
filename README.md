@@ -1,76 +1,78 @@
 # pi-ping
 
-A notification extension for the [pi coding agent](https://pi.dev/). It alerts you when a useful Pi run finishes while you are looking somewhere else.
+A focus-aware notification extension for the [pi coding agent](https://pi.dev/). It alerts you when a Pi run finishes while you are working in another window.
 
-Pi-ping waits for the run to fully settle, ignores trivial and aborted turns, and uses terminal focus when available. When a qualifying run finishes in the background, it sends a native terminal notification and marks the tab title with `! `.
+Pi-ping waits until the turn settles completely, skips trivial answers and aborted runs, and uses terminal focus detection to stay quiet when you are already watching the terminal. When a qualifying run finishes in the background, it sends a native terminal notification and prepends `! ` to the tab title until you switch back.
 
 Repository: <https://github.com/Bukutsu/pi-ping>
 
-## How it looks in practice
+## How it works in practice
 
 ```text
-1. You submit a prompt in Pi:
+1. You run a prompt in Pi:
    Tab title: "π - fix-auth - project"
 
 2. You switch to your browser or editor while Pi works:
-   Pi edits 3 files and runs a test suite (24 seconds).
+   Pi edits 3 files and runs tests (24 seconds).
 
-3. When the entire run finishes:
-   Desktop banner: "Pi: 3 tool calls, 24s"
-   Tab title:      "! π - fix-auth - project"
+3. The entire run finishes:
+   Notification: "Pi: 3 tool calls, 24s"
+   Tab title:    "! π - fix-auth - project"
 
-4. You click back into the terminal:
-   FocusIn event fires. The tab title immediately restores to:
+4. You click back to the terminal:
+   The tab title immediately returns to:
    "π - fix-auth - project"
 ```
 
-## Why use pi-ping?
+## Why pi-ping?
 
-| Scenario | Standard notifiers | pi-ping |
+Most notification extensions either ping on every single message or rely on external scripts. Pi-ping avoids the noise:
+
+| Scenario | Typical notification extensions | pi-ping |
 |---|---|---|
-| You are actively reading the terminal | Sends notification anyway | Silent (DECSET 1004 focus detection) |
-| Short 2-second reply with no tool calls | Sends notification | Silent (<10s, no tools, no errors) |
-| Multi-turn runs, compaction, or retries | Multiple intermediate pings | Exactly one ping when `agent_settled` fires |
-| Run aborted with Escape | Often sends false "done" ping | Silent |
-| Finding finished tabs among many tabs | Permanent title overwrite or nothing | Temporary `! ` prefix, clears on focus |
-| System overhead | Extra OS daemons or background scripts | 100% native ANSI escape sequences |
+| Looking at the terminal | Sends a notification anyway | Stays silent via DECSET 1004 focus detection |
+| Quick reply with no tool calls | Sends a notification | Stays silent (<10s, 0 tool calls, 0 errors) |
+| Auto-retry or context compaction | Pings on every intermediate step | Pings once after `agent_settled` fires |
+| Prompt cancelled with Escape | Often fires a false completion alert | Stays silent |
+| Spotting finished tabs | Renames tab permanently or does nothing | Adds temporary `! ` prefix, clears on focus |
+| Setup requirements | Background daemons or extra packages | Native ANSI escape sequences only |
 
 ## When you do not need it
 
-You probably do not need Pi-ping if:
+Skip pi-ping if:
 
-- you keep Pi visible on a dedicated screen at all times;
-- you want a notification or sound after every single prompt, including one-word answers; or
-- you need click-to-focus window management or mobile push alerts.
+- you keep your terminal visible on a dedicated monitor while Pi runs;
+- you prefer an audible bell after every single prompt, including short one-line replies; or
+- you need window focus automation or mobile push notifications.
 
-## What it does
+## Gating and delivery
 
-### Smart gating
+### When it notifies
 
-- **Trivial turn filter**: Turns under 10 seconds with zero tool calls and zero errors stay quiet.
-- **Escape abort filter**: Aborted runs never notify.
-- **Interrupted run filter**: If a process is terminated mid-flight without `agent_end`, it stays silent.
-- **Fully settled gating**: Listens to `agent_settled`, ensuring retries and compaction finish before alerting.
-- **Focus detection hierarchy**: Checks terminal focus reporting first, tmux window focus second, and falls back to work duration and tool counts when neither is present.
+- Skips runs under 10 seconds with no tool calls and no errors.
+- Skips runs aborted with Escape.
+- Stays silent if the process exited mid-flight without an `agent_end` event.
+- Waits for `agent_settled` so retries and compactions finish before pinging.
+- Prioritizes terminal focus reporting first, tmux window focus second, and turn duration heuristics as a fallback.
 
-### Native notification delivery
+### Notification protocols
 
-- `OSC 99` for kitty
-- `OSC 9` for Ghostty, iTerm2, WezTerm, and Warp
-- `OSC 777` for standard terminals
-- `notify-send` fallback on Linux when running in terminals without native escape notifications
+- `OSC 99` on kitty
+- `OSC 9` on Ghostty, iTerm2, WezTerm, and Warp
+- `OSC 777` on other compatible terminals
+- `notify-send` on Linux when the running terminal does not support escape notifications
 
-### Safe tab title decoration
+### Tab title markers
 
-When the terminal is unfocused, pi-ping queries the terminal for its current title via `CSI 21 t` and prepends `! `.
+When Pi finishes in an unfocused window, pi-ping queries the current terminal title with `CSI 21 t` and prepends `! `.
 
-- Append-only: it decorates the existing title rather than replacing it.
-- Reverts automatically when the tab receives focus or when a new agent run starts.
-- On terminals that do not report titles (such as Windows Terminal or Ghostty without title reporting enabled), it falls back to Pi's standard title format.
+- It decorates the active title rather than replacing it.
+- It clears automatically as soon as the tab receives focus or a new run starts.
+- On terminals that do not answer title queries (such as Windows Terminal or Ghostty without title reporting enabled), it falls back to Pi's default title format.
 
-## Terminal compatibility
+## Terminal support
 
-| Environment | Focus Reporting | Notification | Done Tab Marker |
+| Terminal | Focus detection | Notification | Tab title marker |
 |---|---|---|---|
 | Ghostty | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported (set `title-report = true` in config) |
 | Kitty | Native (DECSET 1004) | OSC 99 | Supported out of the box |
@@ -78,14 +80,14 @@ When the terminal is unfocused, pi-ping queries the terminal for its current tit
 | iTerm2 | Native (DECSET 1004) | OSC 9 | Supported (fallback title format) |
 | Warp | Native (DECSET 1004) | OSC 9 | Supported (fallback title format) |
 | tmux | `#{window_focused}` | Wrapped escape sequences | Supported |
-| Other Linux terminals | Work heuristic | `notify-send` fallback | Supported (fallback title format) |
+| Other Linux terminals | Fallback heuristic | `notify-send` fallback | Supported (fallback title format) |
 
 ## Requirements and limits
 
-- Runs in Pi's interactive TUI mode.
-- Focus detection requires a terminal supporting DECSET 1004 focus reporting or tmux.
-- Ghostty tab title reporting is disabled by default in Ghostty. Add `title-report = true` to `~/.config/ghostty/config` if you want title decoration rather than title fallback.
-- Extensions execute with Pi permissions. Review source code before installing packages.
+- Runs in Pi interactive TUI mode.
+- Focus detection requires a terminal that supports DECSET 1004 or tmux.
+- Ghostty disables title queries by default. To enable tab title decoration, add `title-report = true` to `~/.config/ghostty/config`.
+- Pi extensions run with your user permissions. Always inspect the code before installing third-party packages.
 
 ## Installation
 
@@ -101,11 +103,11 @@ From GitHub:
 pi install git:github.com/Bukutsu/pi-ping
 ```
 
-After installing, restart Pi or run `/reload` in an active session.
+After installing, restart Pi or run `/reload` in your active session.
 
 ## Commands
 
-- `/notify-check`: Check the active focus source, turn stats, and whether a notification would trigger right now.
+- `/notify-check`: Print active focus source, recent turn stats, and whether a notification would fire.
 
 ## Testing
 
