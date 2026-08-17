@@ -16,7 +16,7 @@ Repository: <https://github.com/Bukutsu/pi-ping>
    Pi edits 3 files and runs tests (24 seconds).
 
 3. The entire run finishes:
-   Notification: "Pi: 3 tool calls, 24s"
+   Notification: "Pi (project): 3 tool calls, 24s"
    Tab title:    "[!] π - fix-auth - project"
 
 4. You click back to the terminal:

@@ -51,6 +51,12 @@ export function sanitizeTitle(title: string): string {
   return title.replace(/[\x00-\x1f\x7f]/g, "");
 }
 
+export function notifyTitle(ctx: { cwd?: string }, tag?: string): string {
+  const base = ctx.cwd ? basename(ctx.cwd) : "";
+  const prefix = base ? `Pi (${base})` : "Pi";
+  return tag ? `${prefix} (${tag})` : prefix;
+}
+
 /**
  * Reconstruct pi's own tab-title format (mirrors interactive-mode
  * `updateTerminalTitle`: `π - <session> - <cwd>`). Used only as a fallback
@@ -402,7 +408,7 @@ export default function (pi: ExtensionAPI): void {
     if (errors > 0) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
     if (dur >= 1000) parts.push(`${Math.round(dur / 1000)}s`);
     const body = parts.join(", ") || (isError ? "error" : "done");
-    const title = isError ? "Pi (error)" : "Pi";
+    const title = notifyTitle(ctx, isError ? "error" : undefined);
 
     const deliver = async () => {
       sendNotify(body, title);
@@ -447,7 +453,7 @@ export default function (pi: ExtensionAPI): void {
   pi.registerCommand("notify-test", {
     description: "Send an immediate test notification.",
     handler: async (_args, ctx) => {
-      sendNotify("Desktop and terminal notifications are working.", "Pi (test)");
+      sendNotify("Desktop and terminal notifications are working.", notifyTitle(ctx, "test"));
       ctx.ui.notify("Test notification sent.", "info");
     },
   });
@@ -520,7 +526,7 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   rt(`y${ESC}]l${big}`, ts, "y", undefined, "oversized tail dropped, prefix passes");
   assert(ts.buf === "", "oversized tail not buffered");
 
-  // ── sanitizeTitle / piTabTitle ──
+  // ── sanitizeTitle / piTabTitle / notifyTitle ──
   assert(sanitizeTitle("pi - cwd") === "pi - cwd", "clean title untouched");
   assert(sanitizeTitle("a\x1b]2;evil\x07b") === "a]2;evilb", "control chars stripped (no OSC injection)");
   assert(sanitizeTitle("\x1b\x07\x00") === "", "fully control title emptied");
@@ -531,5 +537,11 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   assert(piTabTitle(fakeCtx("my session", "/home/u/proj")) === "π - my session - proj", "fallback title with session");
   assert(piTabTitle(fakeCtx(undefined, "/home/u/proj")) === "π - proj", "fallback title without session");
   assert(piTabTitle(fakeCtx(undefined, "/")) === "π - ", "fallback title for root cwd (mirrors pi's own basename behavior)");
+  assert(notifyTitle({ cwd: "/home/u/pi-ping" }) === "Pi (pi-ping)", "notify title with directory");
+  assert(notifyTitle({ cwd: "/home/u/pi-ping" }, "error") === "Pi (pi-ping) (error)", "notify error title with directory");
+  assert(notifyTitle({ cwd: "/home/u/pi-ping" }, "test") === "Pi (pi-ping) (test)", "notify test title with directory");
+  assert(notifyTitle({ cwd: "/" }) === "Pi", "notify fallback title for root cwd");
+  assert(notifyTitle({ cwd: "/" }, "error") === "Pi (error)", "notify fallback error title for root cwd");
+  assert(notifyTitle({}) === "Pi", "notify fallback title for missing cwd");
   console.log("all self-tests passed");
 }
