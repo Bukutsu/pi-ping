@@ -1,6 +1,6 @@
 {
   "name": "@bukutsu/pi-ping",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Focus-aware notification and tab-marker extension for the Pi coding agent. Sends native terminal notifications and marks window titles only when unfocused on real work.",
   "type": "module",
   "repository": {
