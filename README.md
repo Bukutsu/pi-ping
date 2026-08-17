@@ -10,7 +10,7 @@ Repository: <https://github.com/Bukutsu/pi-ping>
 
 Most notification extensions either ping on every message, fire during auto-retries, or require OS-specific scripts (`osascript`, `hyprctl`, `dunst`). **pi-ping** does things the Unix way:
 
-1. **Zero OS dependencies**: Uses native terminal escape sequences (`DECSET 1004`, `OSC 9/99/777`, `CSI 21 t`). Runs seamlessly across macOS, Linux, Windows, and tmux without helper daemons.
+1. **Zero OS dependencies**: Uses native terminal escape sequences (`DECSET 1004`, `OSC 9/99/777`, `OSC 0`). Runs seamlessly across macOS, Linux, Windows, and tmux without helper daemons.
 2. **True focus detection**: Intercepts in-stream terminal focus events (`\x1b[I` / `\x1b[O`). If you are already looking at the terminal, it stays completely silent.
 3. **Settled-state gating (`agent_settled`)**: Only pings when Pi is genuinely waiting on you — never interrupts mid-run during auto-retries, tool loops, or context compaction.
 4. **Noise-free**:
@@ -53,13 +53,17 @@ Most notification extensions either ping on every message, fire during auto-retr
 
 | Terminal | Focus detection | Notification | Tab title marker |
 |---|---|---|---|
-| **Ghostty** | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported (set `title-report = true` in config) |
-| **Kitty** | Native (DECSET 1004) | OSC 99 | Supported out of the box |
-| **WezTerm** | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box |
-| **iTerm2** | Native (DECSET 1004) | OSC 9 | Supported (fallback title) |
-| **Warp** | Native (DECSET 1004) | OSC 9 | Supported (fallback title) |
-| **tmux** | `#{window_focused}` | Wrapped escape sequences | Supported |
-| **Linux (other)** | Fallback heuristic | `notify-send` | Supported (fallback title) |
+| **Ghostty** | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box (0ms instant unmark) |
+| **Kitty** | Native (DECSET 1004) | OSC 99 | Supported out of the box (0ms instant unmark) |
+| **WezTerm** | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box (0ms instant unmark) |
+| **Ptyxis / GNOME Terminal / Console / VTE** | Native (DECSET 1004) | `notify-send` | Supported out of the box (0ms instant unmark) |
+| **Alacritty** | Native (DECSET 1004) | `notify-send` | Supported out of the box (0ms instant unmark) |
+| **iTerm2** | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
+| **Foot** | Native (DECSET 1004) | OSC 777 / `notify-send` | Supported out of the box (0ms instant unmark) |
+| **Windows Terminal** | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
+| **Warp** | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
+| **tmux** | `#{window_focused}` / DECSET 1004 | Wrapped escape sequences | Supported out of the box (0ms instant unmark) |
+| **Linux (other)** | Native / Fallback heuristic | `notify-send` | Supported out of the box (0ms instant unmark) |
 
 ## Installation
 

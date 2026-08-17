@@ -13,16 +13,10 @@
  *      real work (>=10s, tool calls, or errors). Runs interrupted mid-flight
  *      (no agent_end ever fired) stay silent. Fallbacks: tmux window_focused
  *      when inside tmux; heuristic tier when no focus source exists.
- *  5. Done marker: on the same qualifying settle, query the terminal for its
- *      current window title (XTWINOPS `CSI 21 t`, reply `OSC l <title> ST`),
- *      then prepend "! " via OSC 0 — append-only, so it decorates pi's own
- *      title (`π - <session> - <cwd>`) or whatever another extension set,
- *      never replacing it. Terminals that don't answer the query (e.g.
- *      ghostty without `title-report = true`, iTerm2, Windows Terminal) fall
- *      back to pi's own naming. Same focus gate as the ping: marked only
- *      while you're NOT looking, and cleared the moment the tab gains focus
- *      (FocusIn) or a new run starts — the tab reads "!" precisely between
- *      "finished", "unwatched", and "working again".
+ *   5. Done marker: on the same qualifying settle, prepend `[!] ` to pi's tab
+ *      title (`π - <session> - <cwd>`) via ctx.ui.setTitle (OSC 0). Cleared the
+ *      moment the tab gains focus (FocusIn) or a new run starts — the tab reads
+ *      `[!] ` precisely between "finished", "unwatched", and "working again".
  *
  * Delivery: OSC 99 (kitty) / OSC 9 (ghostty, iTerm, WezTerm, warp) / OSC 777,
  * plus notify-send fallback on Linux.
@@ -37,8 +31,6 @@ const MIN_WORK_MS = 10_000;
 const MIN_AWAY_MS = 3_000;
 const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
 const ESC = "\x1b";
-const TITLE_QUERY_TIMEOUT_MS = 250; // terminals that don't answer CSI 21 t stay silent
-const TITLE_BUF_CAP = 512; // safety cap for a fragmented title reply
 const DONE_MARKER = process.env.PI_PING_MARKER ?? "[!] "; // prepended to the tab title while the run is done
 
 /**
@@ -59,10 +51,8 @@ export function notifyTitle(ctx: { cwd?: string }, tag?: string): string {
 
 /**
  * Reconstruct pi's own tab-title format (mirrors interactive-mode
- * `updateTerminalTitle`: `π - <session> - <cwd>`). Used only as a fallback
- * when the terminal can't report its current title, so the marker still works
- * on terminals without title reporting (e.g. ghostty without `title-report`).
- * Stock pi uses "π"; renamed builds may differ — the query path is primary.
+ * `updateTerminalTitle`: `π - <session> - <cwd>`).
+ * Stock pi uses "π"; renamed builds may differ.
  */
 export function piTabTitle(ctx: {
   cwd: string;
@@ -120,45 +110,6 @@ export function scanFocusInput(data: string, state: FocusState, now = Date.now()
   out += data.slice(last);
   if (out === data) return undefined; // no focus events — pass through
   return out.length === 0 ? null : out;
-}
-
-/** Buffer for a title reply that arrives split across input chunks. */
-export type TitleScanState = { buf: string };
-
-/**
- * Strip an `OSC l <title> ST|BEL` reply (answer to `CSI 21 t`) from raw input,
- * calling `onTitle` with the extracted title. Same contract as scanFocusInput:
- * undefined = no reply in this chunk, null = chunk fully consumed, string =
- * remainder. A reply split across chunks is held in `state.buf` and recombined
- * on the next call.
- */
-export function scanTitleReply(
-  data: string,
-  state: TitleScanState,
-  onTitle: (title: string) => void,
-): string | null | undefined {
-  const input = state.buf + data;
-  const start = input.indexOf(`${ESC}]l`);
-  if (start === -1) {
-    state.buf = "";
-    return undefined;
-  }
-  const body = start + 3;
-  const st = input.indexOf(`${ESC}\\`, body);
-  const bel = input.indexOf("\x07", body);
-  const end = st !== -1 && (bel === -1 || st < bel) ? st : bel;
-  if (end === -1) {
-    // Reply may continue in the next chunk: hold the tail, pass the prefix on.
-    const tail = input.slice(start);
-    state.buf = tail.length > TITLE_BUF_CAP ? "" : tail;
-    const prefix = input.slice(0, start);
-    return prefix.length === 0 ? null : prefix;
-  }
-  state.buf = "";
-  onTitle(input.slice(body, end));
-  const after = input.slice(end + (input[end] === "\x07" ? 1 : 2));
-  const remainder = input.slice(0, start) + after;
-  return remainder.length === 0 ? null : remainder;
 }
 
 function tmuxFocused(): Promise<boolean | null> {
@@ -221,10 +172,6 @@ export default function (pi: ExtensionAPI): void {
   const focus = initialFocusState();
   let focusEnabled = false; // DECSET 1004 active in the current session
   let unsubscribeInput: (() => void) | undefined;
-  // Tab-title marker state (also per-session — see the note above).
-  const titleScan: TitleScanState = { buf: "" };
-  let pendingTitle: ((title: string | null) => void) | undefined;
-  let markedTitle: string | undefined; // original title we decorated with DONE_MARKER
   let markerActive = false; // the tab title currently carries our marker
   let runInProgress = false; // agent_start fired, no settle since
   let pendingNotifyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -236,72 +183,29 @@ export default function (pi: ExtensionAPI): void {
     }
   };
 
-  /** Ask the terminal for its current window title (native XTWINOPS query). */
-  const queryTitle = (): Promise<string | null> => {
-    if (pendingTitle) return Promise.resolve(null); // previous query still in flight
-    return new Promise((resolve) => {
-      let done = false;
-      const finish = (t: string | null) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        pendingTitle = undefined;
-        titleScan.buf = ""; // drop any partial reply left over from this query
-        resolve(t);
-      };
-      const timer = setTimeout(() => finish(null), TITLE_QUERY_TIMEOUT_MS);
-      pendingTitle = finish;
-      writeToTty(`${ESC}[21t`);
-    });
-  };
-
-  /** Prepend the done marker to the current title; never replaces it. */
-  const markTitle = async (ui: { setTitle(title: string): void }, ctx: ExtensionContext): Promise<void> => {
-    const title = await queryTitle();
-    if (runInProgress) return; // a new run started while we were querying
-    // The user may have focused the tab during the query — then they're
-    // looking, and the marker must not appear (it would only be cleared
-    // again by the FocusIn handler below).
+  /** Prepend the done marker to pi's native tab title. */
+  const markTitle = (ui: { setTitle(title: string): void }, ctx: ExtensionContext): void => {
+    if (runInProgress) return;
     if (focus.gotFocusEvent && focus.focused) return;
-    if (title) {
-      // Query answered: decorate the actual title (pi's or another extension's).
-      const clean = sanitizeTitle(title);
-      if (!clean || clean === markedTitle || clean.startsWith(DONE_MARKER)) return;
-      markedTitle = clean;
-      ui.setTitle(`${DONE_MARKER}${clean}`);
-      markerActive = true;
-      return;
-    }
-    // Terminal can't report its title: fall back to pi's own naming, which is
-    // the default tab title anyway. (Tradeoff: on such terminals the marker
-    // replaces, not decorates — a rename by another extension is lost.)
-    const fallback = sanitizeTitle(piTabTitle(ctx));
-    if (!fallback || fallback === markedTitle || fallback.startsWith(DONE_MARKER)) return;
-    markedTitle = fallback;
-    ui.setTitle(`${DONE_MARKER}${fallback}`);
+    const base = sanitizeTitle(piTabTitle(ctx));
+    if (!base || markerActive) return;
+    ui.setTitle(`${DONE_MARKER}${base}`);
     markerActive = true;
   };
 
-  /** Remove the marker, but only when the title is still ours. */
-  const unmarkTitle = async (ui: { setTitle(title: string): void }): Promise<void> => {
-    if (!markerActive || !markedTitle) return;
-    const title = await queryTitle();
-    if (title && title.startsWith(DONE_MARKER)) {
-      ui.setTitle(title.slice(DONE_MARKER.length));
-    } else if (title === null) {
-      // Query unanswered: can't verify, but a stale marker is worse, so restore
-      // the title we set (best effort; concurrent rename is rare).
-      ui.setTitle(markedTitle);
-    }
-    // Query answered with a different title: another extension owns it — the
-    // marker is gone either way, so stop trying to clear it.
+  /** Restore pi's native tab title. */
+  const unmarkTitle = (ui: { setTitle(title: string): void }, ctx: ExtensionContext): void => {
+    if (!markerActive) return;
+    ui.setTitle(sanitizeTitle(piTabTitle(ctx)));
     markerActive = false;
   };
+
   const terminalFocused = async (): Promise<boolean | null> => {
     if (focus.gotFocusEvent) return focus.focused;
     if (process.env.TMUX) return await tmuxFocused();
     return null;
   };
+
   let startMs = 0;
   let toolCalls = 0;
   let errors = 0;
@@ -317,19 +221,12 @@ export default function (pi: ExtensionAPI): void {
     try {
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
         const wasFocused = focus.focused;
-        let out = scanFocusInput(data, focus);
-        if (out !== null) {
-          // A title reply can arrive interleaved with focus events.
-          const titleOut = pendingTitle
-            ? scanTitleReply(out ?? data, titleScan, (t) => pendingTitle?.(t))
-            : undefined;
-          if (titleOut !== undefined) out = titleOut;
-        }
+        const out = scanFocusInput(data, focus);
         // The tab just became focused: user is looking — cancel pending alert and drop marker.
         if (!wasFocused && focus.focused) {
           cancelPendingNotify();
           if (markerActive) {
-            void unmarkTitle(ctx.ui);
+            unmarkTitle(ctx.ui, ctx);
           }
         }
         if (out === null) return { consume: true };
@@ -347,11 +244,11 @@ export default function (pi: ExtensionAPI): void {
     focusEnabled = false;
     unsubscribeInput?.();
     unsubscribeInput = undefined;
-    pendingTitle?.(null); // don't leave the settle handler awaiting a dead session
-    titleScan.buf = "";
+    markerActive = false;
     Object.assign(focus, initialFocusState());
     writeToTty(`${ESC}[?1004l`);
   };
+
   pi.on("session_shutdown", () => {
     sessionTeardowns.delete(disableFocus);
     disableFocus();
@@ -366,10 +263,8 @@ export default function (pi: ExtensionAPI): void {
     errors = 0;
     lastStopReason = undefined;
     agentEnded = false;
-    // Tab no longer done: clear our marker, but only if the title is exactly
-    // what we set — never clobber pi's or another extension's naming.
-    if (ctx.mode !== "tui" || !markedTitle) return;
-    void unmarkTitle(ctx.ui);
+    if (ctx.mode !== "tui") return;
+    unmarkTitle(ctx.ui, ctx);
   });
 
   pi.on("tool_execution_end", (event) => {
@@ -395,7 +290,7 @@ export default function (pi: ExtensionAPI): void {
     if (toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
 
     // Only a qualifying settle clears runInProgress: a trivial/aborted settle
-    // must leave it true so a stale markTitle() continuation from the previous
+    // must leave it true so a stale continuation from the previous
     // run can't land mid-way through this one.
     runInProgress = false;
 
@@ -410,11 +305,9 @@ export default function (pi: ExtensionAPI): void {
     const body = parts.join(", ") || (isError ? "error" : "done");
     const title = notifyTitle(ctx, isError ? "error" : undefined);
 
-    const deliver = async () => {
+    const deliver = () => {
       sendNotify(body, title);
-      // Done marker: only while you're NOT looking — it clears as soon as the
-      // tab gains focus (FocusIn in the input handler above).
-      await markTitle(ctx.ui, ctx);
+      markTitle(ctx.ui, ctx);
     };
 
     // If we have continuous focus tracking, require at least MIN_AWAY_MS of
@@ -426,14 +319,14 @@ export default function (pi: ExtensionAPI): void {
         pendingNotifyTimer = setTimeout(() => {
           pendingNotifyTimer = undefined;
           if (focus.gotFocusEvent && !focus.focused && !runInProgress) {
-            void deliver();
+            deliver();
           }
         }, MIN_AWAY_MS - awayMs);
         return;
       }
     }
 
-    await deliver();
+    deliver();
   });
 
   pi.registerCommand("notify-check", {
@@ -498,33 +391,6 @@ if (process.env.PI_NOTIFY_SELFTEST) {
   // shared across in-process sessions, so state has to be per-factory-call.
   const other = initialFocusState();
   assert(other.focused === true && other.gotFocusEvent === false, "fresh session starts with clean focus state");
-
-  // ── scanTitleReply ──
-  const ts: TitleScanState = { buf: "" };
-  let got: string | undefined;
-  const rt = (input: string, state: TitleScanState, expected: string | null | undefined, title: string | undefined, label: string) => {
-    got = undefined;
-    const r = scanTitleReply(input, state, (t) => {
-      got = t;
-    });
-    assert(r === expected, `${label}: got ${JSON.stringify(r)}, want ${JSON.stringify(expected)}`);
-    assert(got === title, `${label}: title ${JSON.stringify(got)}, want ${JSON.stringify(title)}`);
-  };
-
-  rt("hello", ts, undefined, undefined, "no reply passes through");
-  rt(`${ESC}]lpi - cwd${ESC}\\`, ts, null, "pi - cwd", "ST-terminated reply extracted");
-  rt(`a${ESC}]lT${ESC}\\b`, ts, "ab", "T", "reply stripped mid-stream");
-  rt(`a${ESC}]lT\x07b`, ts, "ab", "T", "BEL-terminated reply stripped");
-  rt(`${ESC}]lfoo]bar${ESC}\\`, ts, null, "foo]bar", "title containing ] kept intact");
-  rt(`x${ESC}]lpi`, ts, "x", undefined, "split reply: prefix passes, tail buffered");
-  rt(` - cwd${ESC}\\y`, ts, "y", "pi - cwd", "split reply recombined across chunks");
-  rt(`${ESC}]lT`, ts, null, undefined, "incomplete reply consumes chunk");
-  assert(ts.buf === `${ESC}]lT`, "incomplete tail held in buffer");
-  rt(`\x07`, ts, null, "T", "terminator in next chunk completes reply");
-  assert(ts.buf === "", "buffer drained after completion");
-  const big = "z".repeat(600);
-  rt(`y${ESC}]l${big}`, ts, "y", undefined, "oversized tail dropped, prefix passes");
-  assert(ts.buf === "", "oversized tail not buffered");
 
   // ── sanitizeTitle / piTabTitle / notifyTitle ──
   assert(sanitizeTitle("pi - cwd") === "pi - cwd", "clean title untouched");
