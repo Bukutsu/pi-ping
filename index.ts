@@ -220,10 +220,16 @@ export default function (pi: ExtensionAPI): void {
 
     try {
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
-        const wasFocused = focus.focused;
         const out = scanFocusInput(data, focus);
-        // The tab just became focused: user is looking — cancel pending alert and drop marker.
-        if (!wasFocused && focus.focused) {
+        const hasFocusIn = data.includes(`${ESC}[I`);
+        const hasUserTypedInput = out !== null; // out === null means data was pure focus sequence
+
+        // The user is looking if the terminal reported FocusIn or received typed input
+        if (focus.focused || hasFocusIn || hasUserTypedInput) {
+          if (hasUserTypedInput) {
+            focus.focused = true;
+            focus.unfocusedAt = undefined;
+          }
           cancelPendingNotify();
           if (markerActive) {
             unmarkTitle(ctx.ui, ctx);
@@ -238,9 +244,12 @@ export default function (pi: ExtensionAPI): void {
   });
 
   // Session-scoped teardown: idempotent, and resets state for the next session.
-  const disableFocus = () => {
+  const disableFocus = (ctx?: ExtensionContext) => {
     cancelPendingNotify();
     if (!focusEnabled && !unsubscribeInput) return;
+    if (markerActive && ctx) {
+      unmarkTitle(ctx.ui, ctx);
+    }
     focusEnabled = false;
     unsubscribeInput?.();
     unsubscribeInput = undefined;
@@ -249,9 +258,9 @@ export default function (pi: ExtensionAPI): void {
     writeToTty(`${ESC}[?1004l`);
   };
 
-  pi.on("session_shutdown", () => {
+  pi.on("session_shutdown", (_event, ctx) => {
     sessionTeardowns.delete(disableFocus);
-    disableFocus();
+    disableFocus(ctx);
   });
   sessionTeardowns.add(disableFocus);
 
