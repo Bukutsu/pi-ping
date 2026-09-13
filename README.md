@@ -6,18 +6,18 @@ Zero daemons, zero OS binaries, zero external dependencies. Pure ANSI terminal n
 
 Repository: <https://github.com/Bukutsu/pi-ping>
 
-## Why pi-ping stands out
+## Why pi-ping
 
-Most notification extensions either ping on every message, fire during auto-retries, or require OS-specific scripts (`osascript`, `hyprctl`, `dunst`). **pi-ping** does things the Unix way:
+Most notification extensions either ping on every message, fire during auto-retries, or require OS-specific scripts (`osascript`, `hyprctl`, `dunst`). pi-ping does things the Unix way:
 
-1. **Zero OS dependencies**: Uses native terminal escape sequences (`DECSET 1004`, `OSC 9/99/777`, `OSC 0`). Runs seamlessly across macOS, Linux, Windows, and tmux without helper daemons.
-2. **True focus detection**: Intercepts in-stream terminal focus events (`\x1b[I` / `\x1b[O`). If you are already looking at the terminal, it stays completely silent.
-3. **Settled-state gating (`agent_settled`)**: Only pings when Pi is genuinely waiting on you — never interrupts mid-run during auto-retries, tool loops, or context compaction.
-4. **Noise-free**:
-   - **Trivial turn filter**: Skips short replies (<10s, 0 tools, 0 errors).
-   - **Away debounce (3s)**: Skips momentary glances or rapid window switching.
-5. **Append-only tab marker**: Temporarily prepends `[!] ` to the existing tab title while unwatched, and restores your title the moment you click back into the terminal.
-6. **Project-aware**: Notification titles include the active directory name (e.g. `Pi (my-project)`).
+1. Zero OS dependencies: Uses native terminal escape sequences (`DECSET 1004`, `OSC 9/99/777`, `OSC 0`). Works across macOS, Linux, Windows, and tmux without helper daemons.
+2. Focus detection: Intercepts in-stream terminal focus events (`\x1b[I` / `\x1b[O`). If you are already looking at the terminal, it stays silent.
+3. Settled-state gating (`agent_settled`): Only pings when Pi is waiting on you. Never fires mid-run during auto-retries, tool loops, or context compaction.
+4. Noise-free:
+   - Trivial turn filter: Skips short replies (<10s, 0 tools, 0 errors).
+   - Away debounce (3s): Skips momentary glances or rapid window switching.
+5. Append-only tab marker: Prepends `[!] ` to the existing tab title while unwatched, and restores your title the moment you focus the terminal again.
+6. Project-aware: Notification titles include the active directory name (e.g. `Pi (my-project)`).
 
 ## How it works
 
@@ -41,29 +41,29 @@ Most notification extensions either ping on every message, fire during auto-retr
 
 | Feature | Typical notification extensions | pi-ping |
 |---|---|---|
-| **Looking at terminal** | Pings anyway | **Silent** (native DECSET 1004 focus detection) |
-| **Momentary Alt-Tab** | Immediate notification | **Silent** (>=3s continuous away debounce) |
-| **Quick 1-sentence reply** | Pings anyway | **Silent** (<10s, 0 tools, 0 errors) |
-| **Auto-retries & Compaction** | Pings on every intermediate step | **Pings once** after run fully settles (`agent_settled`) |
-| **Cancelled with Escape** | Often triggers false alert | **Silent** |
-| **Tab status** | Overwrites title permanently with emojis | **Decorates title with `[!] `**, clears on focus |
-| **Dependencies** | Requires `osascript`, `hyprctl`, or Python | **Zero dependencies** (pure ANSI escape sequences) |
+| Looking at terminal | Pings anyway | Silent (native DECSET 1004 focus detection) |
+| Momentary Alt-Tab | Immediate notification | Silent (>=3s continuous away debounce) |
+| Quick 1-sentence reply | Pings anyway | Silent (<10s, 0 tools, 0 errors) |
+| Auto-retries & Compaction | Pings on every intermediate step | Pings once after run fully settles (`agent_settled`) |
+| Cancelled with Escape | Often triggers false alert | Silent |
+| Tab status | Overwrites title permanently with emojis | Decorates title with `[!] `, clears on focus |
+| Dependencies | Requires `osascript`, `hyprctl`, or Python | Zero dependencies (pure ANSI escape sequences) |
 
 ## Terminal support
 
 | Terminal | Focus detection | Notification | Tab title marker |
 |---|---|---|---|
-| **Ghostty** | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box (0ms instant unmark) |
-| **Kitty** | Native (DECSET 1004) | OSC 99 | Supported out of the box (0ms instant unmark) |
-| **WezTerm** | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box (0ms instant unmark) |
-| **Ptyxis / GNOME Terminal / Console / VTE** | Native (DECSET 1004) | `notify-send` | Supported out of the box (0ms instant unmark) |
-| **Alacritty** | Native (DECSET 1004) | `notify-send` | Supported out of the box (0ms instant unmark) |
-| **iTerm2** | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
-| **Foot** | Native (DECSET 1004) | OSC 777 / `notify-send` | Supported out of the box (0ms instant unmark) |
-| **Windows Terminal** | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
-| **Warp** | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
-| **tmux** | `#{window_focused}` / DECSET 1004 | Wrapped escape sequences | Supported out of the box (0ms instant unmark) |
-| **Linux (other)** | Native / Fallback heuristic | `notify-send` | Supported out of the box (0ms instant unmark) |
+| Ghostty | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box (0ms instant unmark) |
+| Kitty | Native (DECSET 1004) | OSC 99 | Supported out of the box (0ms instant unmark) |
+| WezTerm | Native (DECSET 1004) | OSC 9 / OSC 777 | Supported out of the box (0ms instant unmark) |
+| Ptyxis / GNOME Terminal / Console / VTE | Native (DECSET 1004) | `notify-send` | Supported out of the box (0ms instant unmark) |
+| Alacritty | Native (DECSET 1004) | `notify-send` | Supported out of the box (0ms instant unmark) |
+| iTerm2 | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
+| Foot | Native (DECSET 1004) | OSC 777 / `notify-send` | Supported out of the box (0ms instant unmark) |
+| Windows Terminal | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
+| Warp | Native (DECSET 1004) | OSC 9 | Supported out of the box (0ms instant unmark) |
+| tmux | `#{window_focused}` / DECSET 1004 | Wrapped escape sequences | Supported out of the box (0ms instant unmark) |
+| Linux (other) | Native / Fallback heuristic | `notify-send` | Supported out of the box (0ms instant unmark) |
 
 ## Installation
 
@@ -99,4 +99,3 @@ Restart Pi or run `/reload` in your active session.
 bun run typecheck   # tsc --strict against the pi extension API
 bun run test        # self-test: focus scanner and title-reply scanner
 ```
-
