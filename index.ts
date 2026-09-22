@@ -127,7 +127,11 @@ function writeToTty(data: string): void {
   try {
     appendFileSync("/dev/tty", data);
   } catch {
-    process.stdout.write(data);
+    try {
+      process.stdout.write(data);
+    } catch {
+      // stdout may be closed or broken during teardown/exit
+    }
   }
 }
 
