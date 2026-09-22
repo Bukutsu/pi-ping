@@ -221,11 +221,10 @@ export default function (pi: ExtensionAPI): void {
     try {
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
         const out = scanFocusInput(data, focus);
-        const hasFocusIn = data.includes(`${ESC}[I`);
         const hasUserTypedInput = out !== null; // out === null means data was pure focus sequence
 
         // The user is looking if the terminal reported FocusIn or received typed input
-        if (focus.focused || hasFocusIn || hasUserTypedInput) {
+        if (focus.focused || hasUserTypedInput) {
           if (hasUserTypedInput) {
             focus.focused = true;
             focus.unfocusedAt = undefined;
