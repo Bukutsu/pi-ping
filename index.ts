@@ -223,6 +223,7 @@ export default function (pi: ExtensionAPI): void {
     focusEnabled = true;
 
     try {
+      unsubscribeInput?.();
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
         const out = scanFocusInput(data, focus);
         const hasUserTypedInput = out !== null; // out === null means data was pure focus sequence
@@ -332,6 +333,7 @@ export default function (pi: ExtensionAPI): void {
             deliver();
           }
         }, MIN_AWAY_MS - awayMs);
+        pendingNotifyTimer.unref?.();
         return;
       }
     }
