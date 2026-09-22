@@ -114,7 +114,7 @@ export function scanFocusInput(data: string, state: FocusState, now = Date.now()
 
 function tmuxFocused(): Promise<boolean | null> {
   return new Promise((resolve) => {
-    execFile("tmux", ["display-message", "-p", "#{window_focused}"], (_err, out) => {
+    execFile("tmux", ["display-message", "-p", "#{window_focused}"], { timeout: 1000 }, (_err, out) => {
       const v = (out ?? "").trim();
       resolve(v === "1" ? true : v === "0" ? false : null);
     });
@@ -152,7 +152,7 @@ function sendNotify(body: string, title = "Pi"): void {
   // natively. Terminals we send OSC 99/9 to show the notification themselves;
   // notify-send on top of that would duplicate it.
   if (process.platform === "linux" && !terminalNotifies) {
-    execFile("notify-send", ["-a", "Pi", title, body], () => {});
+    execFile("notify-send", ["-a", "Pi", title, body], { timeout: 3000 }, () => {});
   }
 }
 
