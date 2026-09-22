@@ -292,16 +292,12 @@ export default function (pi: ExtensionAPI): void {
   // compaction retry, or queued follow-up will run afterwards.
   pi.on("agent_settled", async (_event, ctx) => {
     if (ctx.mode !== "tui") return; // headless/child session (e.g. subagent) — parent pings instead
+    runInProgress = false;
     const dur = startMs ? Date.now() - startMs : 0;
 
     if (!agentEnded) return; // run interrupted mid-flight — never finished, stay silent
     if (lastStopReason === "aborted") return; // turn was aborted
     if (toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
-
-    // Only a qualifying settle clears runInProgress: a trivial/aborted settle
-    // must leave it true so a stale continuation from the previous
-    // run can't land mid-way through this one.
-    runInProgress = false;
 
     const focusedNow = await terminalFocused();
     if (focusedNow === true) return; // terminal is focused — you're looking
