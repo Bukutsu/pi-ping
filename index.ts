@@ -265,10 +265,12 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("agent_start", (_event, ctx) => {
     cancelPendingNotify();
-    runInProgress = true;
-    startMs = Date.now();
-    toolCalls = 0;
-    errors = 0;
+    if (!runInProgress || !startMs) {
+      runInProgress = true;
+      startMs = Date.now();
+      toolCalls = 0;
+      errors = 0;
+    }
     lastStopReason = undefined;
     agentEnded = false;
     if (ctx.mode !== "tui") return;
