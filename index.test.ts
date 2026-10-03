@@ -163,6 +163,11 @@ describe("terminal boundaries", () => {
 });
 
 describe("lifecycle", () => {
+  test("only the last TUI owner disables terminal focus reporting", () => {
+    const first = setup(); const second = setup(); first.emit("session_start"); second.emit("session_start");
+    writes.length = 0; first.emit("session_shutdown"); expect(writes).toEqual([]);
+    second.emit("session_shutdown"); expect(writes).toEqual([`${ESC}[?1004l`]);
+  });
   test("session restart resets unfinished run statistics", async () => {
     const f = setup(); away(f); f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });
     f.emit("session_shutdown"); away(f); f.emit("agent_start"); await finish(f);

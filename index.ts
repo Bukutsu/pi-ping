@@ -287,7 +287,7 @@ export default function (pi: ExtensionAPI): void {
     unsubscribeInput = undefined;
     markerActive = false;
     Object.assign(focus, initialFocusState());
-    writeToTty(`${ESC}[?1004l`);
+    if (sessionTeardowns.size === 0) writeToTty(`${ESC}[?1004l`);
   };
 
   pi.on("session_shutdown", (_event, ctx) => disableFocus(ctx));
