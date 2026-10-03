@@ -115,6 +115,17 @@ describe("run contracts", () => {
 });
 
 describe("terminal boundaries", () => {
+  test("tmux fallback queries Pi's own pane, with implicit target only if absent", async () => {
+    process.env.TMUX = "test";
+    const f = setup();
+    for (const pane of ["%123", undefined]) {
+      if (pane) process.env.TMUX_PANE = pane; else delete process.env.TMUX_PANE;
+      const check = f.command("notify-check"); const cmd = commands.at(-1)!;
+      expect(cmd.args).toEqual(["display-message", "-p", ...(pane ? ["-t", pane] : []), "#{window_focused}"]);
+      cmd.callback(null, "0\n"); await check;
+      expect(f.notices.at(-1)).toContain("tmux:unfocused");
+    }
+  });
   test("terminal replies do not imply focus or cancel alerts", async () => {
     const f = setup(); f.emit("session_start"); f.input(`${ESC}[O`);
     f.emit("agent_start"); f.emit("tool_execution_end", { isError: false }); await finish(f);

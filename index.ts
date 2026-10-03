@@ -123,7 +123,8 @@ function isTerminalResponse(data: string): boolean {
 
 function tmuxFocused(): Promise<boolean | null> {
   return new Promise((resolve) => {
-    execFile("tmux", ["display-message", "-p", "#{window_focused}"], { timeout: 1000 }, (_err, out) => {
+    const target = process.env.TMUX_PANE ? ["-t", process.env.TMUX_PANE] : [];
+    execFile("tmux", ["display-message", "-p", ...target, "#{window_focused}"], { timeout: 1000 }, (_err, out) => {
       const v = (out ?? "").trim();
       resolve(v === "1" ? true : v === "0" ? false : null);
     });
