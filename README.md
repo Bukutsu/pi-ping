@@ -25,7 +25,7 @@ Restart Pi or run `/reload` in your active session.
 - Suppresses notifications when the terminal is known to be focused.
 - Adds `[!] ` to Pi's tab title while a finished run is unread, and restores it when you return or type.
 - Stays quiet on short turns (under 10s with no tools or errors) and cancelled runs.
-- Waits 3 seconds after you switch windows before alerting so quick glances stay silent.
+- With terminal focus events, waits until you have been away for 3 seconds before alerting.
 - Alerts once after the run fully settles (no pings during intermediate tool calls or auto-retries).
 - Uses native terminal escapes (OSC 9, 99, 777) with `notify-send` fallback on Linux.
 
