@@ -40,7 +40,7 @@ const DONE_MARKER = process.env.PI_PING_MARKER ?? "[!] "; // prepended to the ta
  * escape sequences into the terminal (OSC 52 clipboard writes, etc.).
  */
 export function sanitizeTitle(title: string): string {
-  return title.replace(/[\x00-\x1f\x7f]/g, "");
+  return title.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
 }
 
 export function notifyTitle(ctx: { cwd?: string }, tag?: string): string {
@@ -138,6 +138,8 @@ function writeToTty(data: string): void {
 }
 
 function sendNotify(body: string, title = "Pi"): void {
+  title = sanitizeTitle(title);
+  body = sanitizeTitle(body);
   let seq: string;
   let terminalNotifies = true;
   if (process.env.KITTY_WINDOW_ID) {
@@ -147,7 +149,7 @@ function sendNotify(body: string, title = "Pi"): void {
     seq = `${ESC}]9;${title}: ${body}\x07`;
   } else {
     // Unknown terminal: OSC 777 may render nothing, so notify-send below covers it.
-    seq = `${ESC}]777;notify;${title};${body}\x07`;
+    seq = `${ESC}]777;notify;${title.replaceAll(";", ",")};${body.replaceAll(";", ",")}\x07`;
     terminalNotifies = false;
   }
   if (process.env.TMUX) seq = `${ESC}Ptmux;${seq.replaceAll(ESC, ESC + ESC)}${ESC}\\`;
@@ -197,7 +199,7 @@ export default function (pi: ExtensionAPI): void {
     if (focus.gotFocusEvent && focus.focused) return;
     const base = sanitizeTitle(piTabTitle(ctx));
     if (!base || markerActive) return;
-    ui.setTitle(`${DONE_MARKER}${base}`);
+    ui.setTitle(sanitizeTitle(`${DONE_MARKER}${base}`));
     markerActive = true;
   };
 

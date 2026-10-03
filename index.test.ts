@@ -7,10 +7,10 @@ mock.module("node:child_process", () => ({ execFile: (name: string, args: string
   commands.push({ name, args, callback });
   if (name !== "tmux") callback(null, "");
 } }));
-const oldExitHooks = new Set(process.listeners("exit"));
-const { default: extension, initialFocusState, scanFocusInput } = await import("./index.ts");
-const exitHook = process.listeners("exit").find((fn) => !oldExitHooks.has(fn))!;
 const env = { ...process.env };
+process.env.PI_PING_MARKER = "\x1b]52;c;owned\x07";
+const { default: extension, initialFocusState, scanFocusInput } = await import("./index.ts");
+process.env = { ...env };
 const realNow = Date.now;
 const realSetTimeout = globalThis.setTimeout;
 const realClearTimeout = globalThis.clearTimeout;
@@ -106,6 +106,18 @@ describe("run contracts", () => {
 });
 
 describe("terminal boundaries", () => {
+  test("notification title cannot inject OSC controls or fields", async () => {
+    const f = setup("tui", "/tmp/bad\x1b]52;c;owned\x07;name"); away(f);
+    f.emit("agent_start"); f.emit("tool_execution_end", { isError: false }); await finish(f);
+    const seq = writes.find((w) => w.includes("]777;"))!;
+    expect(seq.match(/\x1b/g)).toHaveLength(1);
+    expect(seq.match(/\x07/g)).toHaveLength(1);
+    expect(seq.split(";")).toHaveLength(4);
+  });
+  test("marked title cannot inject terminal controls", async () => {
+    const f = setup(); away(f); f.emit("agent_start"); f.emit("tool_execution_end", { isError: false }); await finish(f);
+    expect(f.titles.at(-1)).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+  });
   test("bracketed paste preserves literal focus sequences", () => {
     const state = initialFocusState();
     const data = `${ESC}[200~literal${ESC}[Otext${ESC}[I${ESC}[201~`;
