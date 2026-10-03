@@ -64,6 +64,15 @@ afterEach(() => {
 });
 
 describe("run contracts", () => {
+  test("notify-check keeps settled duration and uses notification eligibility", async () => {
+    const f = setup(); away(f); f.emit("agent_start"); await finish(f);
+    now += 60_000; await f.command("notify-check");
+    expect(f.notices.at(-1)).toContain("dur=0s | would silent");
+    f.emit("agent_start"); f.emit("tool_execution_end", { isError: true }); await finish(f, "aborted");
+    await f.command("notify-check"); expect(f.notices.at(-1)).toEndWith("would silent");
+    f.emit("agent_start"); await finish(f, "error"); await f.command("notify-check");
+    expect(f.notices.at(-1)).toEndWith("would PING");
+  });
   test("fast provider errors notify", async () => {
     const f = setup(); away(f); f.emit("agent_start"); await finish(f, "error");
     expect(writes.some((w) => w.includes("]777;"))).toBe(true);

@@ -224,10 +224,13 @@ export default function (pi: ExtensionAPI): void {
   };
 
   let startMs = 0;
+  let durationMs = 0;
   let toolCalls = 0;
   let errors = 0;
   let lastStopReason: string | undefined;
   let agentEnded = false; // agent_end fired for the current run
+  const worthNotifying = (dur: number): boolean => agentEnded && lastStopReason !== "aborted" &&
+    (lastStopReason === "error" || toolCalls > 0 || errors > 0 || dur >= MIN_WORK_MS);
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return; // focus reporting only makes sense interactively
@@ -269,6 +272,7 @@ export default function (pi: ExtensionAPI): void {
     cancelPendingNotify();
     runInProgress = false;
     startMs = 0;
+    durationMs = 0;
     toolCalls = 0;
     errors = 0;
     lastStopReason = undefined;
@@ -292,6 +296,7 @@ export default function (pi: ExtensionAPI): void {
     if (!runInProgress || !startMs) {
       runInProgress = true;
       startMs = Date.now();
+      durationMs = 0;
       toolCalls = 0;
       errors = 0;
     }
@@ -320,12 +325,9 @@ export default function (pi: ExtensionAPI): void {
     cancelPendingNotify();
     const generation = notifyGeneration;
     runInProgress = false;
-    const dur = startMs ? Date.now() - startMs : 0;
-
-    if (!agentEnded) return; // run interrupted mid-flight — never finished, stay silent
-    if (lastStopReason === "aborted") return; // turn was aborted
+    const dur = durationMs = startMs ? Date.now() - startMs : 0;
+    if (!worthNotifying(dur)) return;
     const isError = lastStopReason === "error";
-    if (!isError && toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
 
     const focusedNow = await terminalFocused();
     if (generation !== notifyGeneration || focusedNow === true) return; // stale or you're looking
@@ -367,10 +369,10 @@ export default function (pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       const f = await terminalFocused();
       const source = focus.gotFocusEvent ? "terminal-focus" : process.env.TMUX ? "tmux" : "unknown";
-      const dur = startMs ? Date.now() - startMs : 0;
+      const dur = runInProgress && startMs ? Date.now() - startMs : durationMs;
       const away = focus.unfocusedAt ? `${Math.round((Date.now() - focus.unfocusedAt) / 1000)}s` : "n/a";
       const focusStr = f === true ? "focused" : f === false ? `unfocused (away ${away})` : "?";
-      const would = f !== true && (toolCalls > 0 || errors > 0 || dur >= MIN_WORK_MS);
+      const would = f !== true && !runInProgress && worthNotifying(dur);
       const msg = `focus ${source}:${focusStr} | tools=${toolCalls} errors=${errors} dur=${Math.round(dur / 1000)}s | would ${would ? "PING" : "silent"}`;
       ctx.ui.notify(msg, "info");
     },
