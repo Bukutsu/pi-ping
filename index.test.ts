@@ -68,6 +68,29 @@ describe("run contracts", () => {
     const f = setup(); away(f); f.emit("agent_start"); await finish(f, "error");
     expect(writes.some((w) => w.includes("]777;"))).toBe(true);
   });
+  test("new run cancels a pending tmux focus lookup", async () => {
+    process.env.TMUX = "test";
+    const f = setup(); f.emit("session_start"); writes.length = 0;
+    f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });
+    const settled = finish(f); f.emit("agent_start");
+    commands.find((c) => c.name === "tmux")!.callback(null, "0\n"); await settled;
+    expect(writes).toEqual([]);
+  });
+  test("typed input cancels pending tmux focus lookup", async () => {
+    process.env.TMUX = "test";
+    const f = setup(); f.emit("session_start"); writes.length = 0;
+    f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });
+    const settled = finish(f); f.input("hello");
+    commands.find((c) => c.name === "tmux")!.callback(null, "0\n"); await settled;
+    expect(writes).toEqual([]);
+  });
+  test("shutdown cancels in-flight focus queries", async () => {
+    process.env.TMUX = "test";
+    const f = setup(); f.emit("session_start"); f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });
+    const settled = finish(f); f.emit("session_shutdown"); writes.length = 0;
+    commands.find((c) => c.name === "tmux")!.callback(null, "0\n"); await settled;
+    expect(writes).toEqual([]);
+  });
   test("short successful runs and aborted runs stay silent", async () => {
     const f = setup(); away(f); f.emit("agent_start"); await finish(f);
     f.emit("agent_start"); f.emit("tool_execution_end", { isError: true }); await finish(f, "aborted");

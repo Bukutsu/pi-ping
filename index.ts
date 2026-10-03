@@ -181,8 +181,10 @@ export default function (pi: ExtensionAPI): void {
   let markerActive = false; // the tab title currently carries our marker
   let runInProgress = false; // agent_start fired, no settle since
   let pendingNotifyTimer: ReturnType<typeof setTimeout> | undefined;
+  let notifyGeneration = 0;
 
   const cancelPendingNotify = () => {
+    notifyGeneration++; // invalidate awaited focus queries as well as timers
     if (pendingNotifyTimer) {
       clearTimeout(pendingNotifyTimer);
       pendingNotifyTimer = undefined;
@@ -300,6 +302,8 @@ export default function (pi: ExtensionAPI): void {
   // compaction retry, or queued follow-up will run afterwards.
   pi.on("agent_settled", async (_event, ctx) => {
     if (ctx.mode !== "tui") return; // headless/child session (e.g. subagent) — parent pings instead
+    cancelPendingNotify();
+    const generation = notifyGeneration;
     runInProgress = false;
     const dur = startMs ? Date.now() - startMs : 0;
 
@@ -309,7 +313,7 @@ export default function (pi: ExtensionAPI): void {
     if (!isError && toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
 
     const focusedNow = await terminalFocused();
-    if (focusedNow === true) return; // terminal is focused — you're looking
+    if (generation !== notifyGeneration || focusedNow === true) return; // stale or you're looking
 
     const parts = [];
     if (toolCalls > 0) parts.push(`${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`);
@@ -319,6 +323,7 @@ export default function (pi: ExtensionAPI): void {
     const title = notifyTitle(ctx, isError ? "error" : undefined);
 
     const deliver = () => {
+      if (generation !== notifyGeneration || runInProgress || (focus.gotFocusEvent && focus.focused)) return;
       sendNotify(body, title);
       markTitle(ctx.ui, ctx);
     };
@@ -328,7 +333,6 @@ export default function (pi: ExtensionAPI): void {
     if (focus.gotFocusEvent && focus.unfocusedAt !== undefined) {
       const awayMs = Date.now() - focus.unfocusedAt;
       if (awayMs < MIN_AWAY_MS) {
-        cancelPendingNotify();
         pendingNotifyTimer = setTimeout(() => {
           pendingNotifyTimer = undefined;
           if (focus.gotFocusEvent && !focus.focused && !runInProgress) {
