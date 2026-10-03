@@ -81,3 +81,12 @@ describe("run contracts", () => {
     expect(writes.join("")).toContain("2 tool calls");
   });
 });
+
+describe("terminal boundaries", () => {
+  test("bracketed paste preserves literal focus sequences", () => {
+    const state = initialFocusState();
+    const data = `${ESC}[200~literal${ESC}[Otext${ESC}[I${ESC}[201~`;
+    expect(scanFocusInput(data, state)).toBeUndefined();
+    expect(state.gotFocusEvent).toBe(false);
+  });
+});

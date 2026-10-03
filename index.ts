@@ -86,6 +86,8 @@ export function initialFocusState(): FocusState {
 /** Strip FocusIn/FocusOut from raw input, updating `state`.
  *  Returns null when fully consumed, the stripped string, or undefined if unchanged. */
 export function scanFocusInput(data: string, state: FocusState, now = Date.now()): string | null | undefined {
+  // Pi delivers bracketed paste as one packet; its contents are user text.
+  if (data.startsWith(`${ESC}[200~`)) return undefined;
   let out = "";
   let last = 0;
   for (let i = 0; i < data.length; i++) {
