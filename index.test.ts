@@ -106,6 +106,22 @@ describe("run contracts", () => {
 });
 
 describe("terminal boundaries", () => {
+  test("terminal replies do not imply focus or cancel alerts", async () => {
+    const f = setup(); f.emit("session_start"); f.input(`${ESC}[O`);
+    f.emit("agent_start"); f.emit("tool_execution_end", { isError: false }); await finish(f);
+    for (const data of [`${ESC}[6;20;10t`, `${ESC}[4;800;600t`, `${ESC}[1;2R`, `${ESC}[?1;2c`, `${ESC}[0n`, `${ESC}]11;rgb:0000/0000/0000\x07`, `${ESC}P1+rdata${ESC}\\`]) {
+      expect(f.input(data)).toBeUndefined();
+    }
+    await f.command("notify-check");
+    expect(f.notices.at(-1)).toContain("unfocused");
+    expect(timers.size).toBe(1);
+  });
+  test("keyboard and pasted input still imply focus", async () => {
+    for (const data of ["hello", `${ESC}P`, `${ESC}]`, `${ESC}[200~paste${ESC}[201~`]) {
+      const f = setup(); away(f); f.input(data); await f.command("notify-check");
+      expect(f.notices.at(-1)).toContain("terminal-focus:focused");
+    }
+  });
   test("notification title cannot inject OSC controls or fields", async () => {
     const f = setup("tui", "/tmp/bad\x1b]52;c;owned\x07;name"); away(f);
     f.emit("agent_start"); f.emit("tool_execution_end", { isError: false }); await finish(f);

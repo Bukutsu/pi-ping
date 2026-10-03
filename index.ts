@@ -114,6 +114,13 @@ export function scanFocusInput(data: string, state: FocusState, now = Date.now()
   return out.length === 0 ? null : out;
 }
 
+// Pi passes terminal replies through this listener too. They are not typing.
+function isTerminalResponse(data: string): boolean {
+  return /^\x1b\[(?:[46];\d+;\d+t|\d+;\d+R|[?>]?[\d;]*[cn])$/.test(data) ||
+    /^\x1b\][\s\S]*(?:\x07|\x1b\\)$/.test(data) ||
+    /^\x1bP[\s\S]*\x1b\\$/.test(data);
+}
+
 function tmuxFocused(): Promise<boolean | null> {
   return new Promise((resolve) => {
     execFile("tmux", ["display-message", "-p", "#{window_focused}"], { timeout: 1000 }, (_err, out) => {
@@ -232,7 +239,7 @@ export default function (pi: ExtensionAPI): void {
       unsubscribeInput?.();
       unsubscribeInput = ctx.ui.onTerminalInput((data) => {
         const out = scanFocusInput(data, focus);
-        const hasUserTypedInput = out !== null; // out === null means data was pure focus sequence
+        const hasUserTypedInput = out !== null && !isTerminalResponse(out ?? data);
 
         // The user is looking if the terminal reported FocusIn or received typed input
         if (focus.focused || hasUserTypedInput) {
