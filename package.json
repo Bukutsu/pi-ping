@@ -23,7 +23,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "test": "PI_NOTIFY_SELFTEST=1 bun index.ts",
+    "test": "PI_NOTIFY_SELFTEST=1 bun index.ts && bun test",
     "typecheck": "bunx tsc --noEmit --strict --skipLibCheck index.ts"
   },
   "keywords": [

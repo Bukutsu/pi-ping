@@ -303,12 +303,12 @@ export default function (pi: ExtensionAPI): void {
 
     if (!agentEnded) return; // run interrupted mid-flight — never finished, stay silent
     if (lastStopReason === "aborted") return; // turn was aborted
-    if (toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
+    const isError = lastStopReason === "error";
+    if (!isError && toolCalls === 0 && errors === 0 && dur < MIN_WORK_MS) return; // trivial turn
 
     const focusedNow = await terminalFocused();
     if (focusedNow === true) return; // terminal is focused — you're looking
 
-    const isError = lastStopReason === "error";
     const parts = [];
     if (toolCalls > 0) parts.push(`${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`);
     if (errors > 0) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
