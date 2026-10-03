@@ -143,6 +143,18 @@ describe("terminal boundaries", () => {
 });
 
 describe("lifecycle", () => {
+  test("session restart resets unfinished run statistics", async () => {
+    const f = setup(); away(f); f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });
+    f.emit("session_shutdown"); away(f); f.emit("agent_start"); await finish(f);
+    expect(writes).toEqual([]);
+  });
+  test("shutdown cancels delayed notifications and unsubscribes", async () => {
+    const f = setup(); f.emit("session_start"); f.input(`${ESC}[O`);
+    f.emit("agent_start"); f.emit("tool_execution_end", { isError: false }); await finish(f);
+    expect(timers.size).toBe(1); f.emit("session_shutdown"); writes.length = 0;
+    for (const timer of timers.values()) timer();
+    expect(writes).toEqual([]); expect(f.unsubscribed()).toBe(1);
+  });
   test("inactive factories and headless sessions acquire no exit hooks", () => {
     const before = process.listenerCount("exit");
     setup(); const headless = setup("rpc"); headless.emit("session_start");

@@ -267,6 +267,12 @@ export default function (pi: ExtensionAPI): void {
     sessionTeardowns.delete(disableFocus);
     if (sessionTeardowns.size === 0) process.off("exit", teardownSessions);
     cancelPendingNotify();
+    runInProgress = false;
+    startMs = 0;
+    toolCalls = 0;
+    errors = 0;
+    lastStopReason = undefined;
+    agentEnded = false;
     if (!focusEnabled && !unsubscribeInput) return;
     if (markerActive && ctx) {
       unmarkTitle(ctx.ui, ctx);
