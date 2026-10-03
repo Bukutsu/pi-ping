@@ -2,7 +2,7 @@
 
 Focus-aware notifications and tab marker for the [Pi coding agent](https://pi.dev/).
 
-pi-ping alerts you when a run finishes while you are in another window, and marks the terminal tab with `[!] ` until you return. It stays quiet when terminal focus reporting or tmux confirms you are looking. If neither can report focus, qualifying runs still alert.
+pi-ping alerts you when a run finishes while you are in another window, and marks the terminal tab with `[!] ` until you return. It stays quiet when terminal focus reporting confirms you are looking. If desktop focus is unknown, qualifying runs still alert.
 
 Repository: <https://github.com/Bukutsu/pi-ping>
 
@@ -31,7 +31,7 @@ Restart Pi or run `/reload` in your active session.
 
 ## Terminal support
 
-Focus tracking uses `DECSET 1004` terminal events, with a tmux focus query as fallback.
+Focus tracking uses `DECSET 1004` terminal events. Under tmux, a window with no viewing clients is also treated as unfocused. A viewed tmux window leaves desktop focus unknown.
 
 Notifications use OSC 99 for Kitty, OSC 9 for Ghostty, iTerm2, WezTerm, and Warp, and OSC 777 for other terminals. Delivery depends on the terminal's notification support and settings. On Linux, the OSC 777 path also tries `notify-send`; that command must be installed for desktop fallback.
 

@@ -11,8 +11,8 @@
  *   4. On agent_settled (after auto-retries, compaction retries, and queued
  *      follow-ups finish): ping only if terminal is unfocused AND the turn did
  *      real work (>=10s, tool calls, or errors). Runs interrupted mid-flight
- *      (no agent_end ever fired) stay silent. Fallbacks: tmux window_focused
- *      when inside tmux; heuristic tier when no focus source exists.
+ *      (no agent_end ever fired) stay silent. Fallbacks: tmux window visibility
+ *      when inside tmux; heuristic tier when desktop focus is unknown.
  *   5. Done marker: on the same qualifying settle, prepend `[!] ` to pi's tab
  *      title (`π - <session> - <cwd>`) via ctx.ui.setTitle (OSC 0). Cleared the
  *      moment the tab gains focus (FocusIn) or a new run starts — the tab reads
@@ -124,9 +124,9 @@ function isTerminalResponse(data: string): boolean {
 function tmuxFocused(): Promise<boolean | null> {
   return new Promise((resolve) => {
     const target = process.env.TMUX_PANE ? ["-t", process.env.TMUX_PANE] : [];
-    execFile("tmux", ["display-message", "-p", ...target, "#{window_focused}"], { timeout: 1000 }, (_err, out) => {
-      const v = (out ?? "").trim();
-      resolve(v === "1" ? true : v === "0" ? false : null);
+    execFile("tmux", ["display-message", "-p", ...target, "#{window_active_clients}"], { timeout: 1000 }, (err, out) => {
+      // Unviewed means away; a viewed window does not prove desktop focus.
+      resolve(!err && out.trim() === "0" ? false : null);
     });
   });
 }

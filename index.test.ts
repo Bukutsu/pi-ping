@@ -115,13 +115,21 @@ describe("run contracts", () => {
 });
 
 describe("terminal boundaries", () => {
+  test("tmux visibility does not claim desktop focus", async () => {
+    process.env.TMUX = "test";
+    const f = setup();
+    for (const [err, output, expected] of [[null, "0\n", "unfocused"], [null, "1\n", "?"], [null, "2\n", "?"], [null, "", "?"], [new Error("query failed"), "0\n", "?"]] as const) {
+      const check = f.command("notify-check"); commands.at(-1)!.callback(err, output); await check;
+      expect(f.notices.at(-1)).toContain(`tmux:${expected}`);
+    }
+  });
   test("tmux fallback queries Pi's own pane, with implicit target only if absent", async () => {
     process.env.TMUX = "test";
     const f = setup();
     for (const pane of ["%123", undefined]) {
       if (pane) process.env.TMUX_PANE = pane; else delete process.env.TMUX_PANE;
       const check = f.command("notify-check"); const cmd = commands.at(-1)!;
-      expect(cmd.args).toEqual(["display-message", "-p", ...(pane ? ["-t", pane] : []), "#{window_focused}"]);
+      expect(cmd.args).toEqual(["display-message", "-p", ...(pane ? ["-t", pane] : []), "#{window_active_clients}"]);
       cmd.callback(null, "0\n"); await check;
       expect(f.notices.at(-1)).toContain("tmux:unfocused");
     }
