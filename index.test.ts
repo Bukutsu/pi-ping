@@ -141,3 +141,28 @@ describe("terminal boundaries", () => {
     expect(state.gotFocusEvent).toBe(false);
   });
 });
+
+describe("lifecycle", () => {
+  test("inactive factories and headless sessions acquire no exit hooks", () => {
+    const before = process.listenerCount("exit");
+    setup(); const headless = setup("rpc"); headless.emit("session_start");
+    expect(process.listenerCount("exit")).toBe(before);
+  });
+  test("session restart retains exit cleanup and releases its hook", () => {
+    const before = new Set(process.listeners("exit"));
+    const f = setup(); f.emit("session_start"); f.emit("session_shutdown"); f.emit("session_start");
+    const hook = process.listeners("exit").find((fn) => !before.has(fn))!;
+    expect(hook).toBeDefined(); writes.length = 0; hook(0);
+    expect(writes).toContain(`${ESC}[?1004l`);
+    expect(process.listenerCount("exit")).toBe(before.size);
+  });
+  test("multiple sessions share a hook and headless shutdown leaves focus active", () => {
+    const before = process.listenerCount("exit");
+    const first = setup(); const second = setup(); const headless = setup("rpc");
+    first.emit("session_start"); second.emit("session_start"); headless.emit("session_start");
+    expect(process.listenerCount("exit")).toBe(before + 1);
+    writes.length = 0; headless.emit("session_shutdown"); expect(writes).toEqual([]);
+    first.emit("session_shutdown"); expect(process.listenerCount("exit")).toBe(before + 1);
+    second.emit("session_shutdown"); expect(process.listenerCount("exit")).toBe(before);
+  });
+});

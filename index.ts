@@ -177,9 +177,9 @@ function sendNotify(body: string, title = "Pi"): void {
 // shared Set so session switches and in-process subagents don't pile up
 // process listeners. (Shared on purpose, unlike the per-session state below.)
 const sessionTeardowns = new Set<() => void>();
-process.on("exit", () => {
+function teardownSessions(): void {
   for (const teardown of sessionTeardowns) teardown();
-});
+}
 
 export default function (pi: ExtensionAPI): void {
   // Per-session state — see the note above. Never hoist these to module scope:
@@ -231,6 +231,8 @@ export default function (pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return; // focus reporting only makes sense interactively
+    if (sessionTeardowns.size === 0) process.on("exit", teardownSessions);
+    sessionTeardowns.add(disableFocus);
 
     writeToTty(`${ESC}[?1004h`); // ask the terminal for focus events
     focusEnabled = true;
@@ -262,6 +264,8 @@ export default function (pi: ExtensionAPI): void {
 
   // Session-scoped teardown: idempotent, and resets state for the next session.
   const disableFocus = (ctx?: ExtensionContext) => {
+    sessionTeardowns.delete(disableFocus);
+    if (sessionTeardowns.size === 0) process.off("exit", teardownSessions);
     cancelPendingNotify();
     if (!focusEnabled && !unsubscribeInput) return;
     if (markerActive && ctx) {
@@ -275,11 +279,7 @@ export default function (pi: ExtensionAPI): void {
     writeToTty(`${ESC}[?1004l`);
   };
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    sessionTeardowns.delete(disableFocus);
-    disableFocus(ctx);
-  });
-  sessionTeardowns.add(disableFocus);
+  pi.on("session_shutdown", (_event, ctx) => disableFocus(ctx));
 
   pi.on("agent_start", (_event, ctx) => {
     cancelPendingNotify();
