@@ -2,7 +2,7 @@
 
 Focus-aware notifications and tab marker for the [Pi coding agent](https://pi.dev/).
 
-pi-ping alerts you when a run finishes while you are in another window, and marks the terminal tab with `[!] ` until you return. If you are already looking at the terminal, it stays quiet.
+pi-ping alerts you when a run finishes while you are in another window, and marks the terminal tab with `[!] ` until you return. It stays quiet when terminal focus reporting or tmux confirms you are looking. If neither can report focus, qualifying runs still alert.
 
 Repository: <https://github.com/Bukutsu/pi-ping>
 
@@ -22,7 +22,7 @@ Restart Pi or run `/reload` in your active session.
 
 ## What it does
 
-- Notifies only when the terminal is unfocused.
+- Suppresses notifications when the terminal is known to be focused.
 - Adds `[!] ` to Pi's tab title while a finished run is unread, and restores it when you return or type.
 - Stays quiet on short turns (under 10s with no tools or errors) and cancelled runs.
 - Waits 3 seconds after you switch windows before alerting so quick glances stay silent.
@@ -31,7 +31,11 @@ Restart Pi or run `/reload` in your active session.
 
 ## Terminal support
 
-Works out of the box with terminals that support `DECSET 1004` focus events (Ghostty, Kitty, WezTerm, Alacritty, iTerm2, Foot, Warp, Windows Terminal, and tmux).
+Focus tracking uses `DECSET 1004` terminal events, with a tmux focus query as fallback.
+
+Notifications use OSC 99 for Kitty, OSC 9 for Ghostty, iTerm2, WezTerm, and Warp, and OSC 777 for other terminals. Delivery depends on the terminal's notification support and settings. On Linux, the OSC 777 path also tries `notify-send`; that command must be installed for desktop fallback.
+
+Focus support alone does not guarantee notification delivery. There is no native Windows toast backend. Under tmux, terminal notifications also require passthrough to be enabled.
 
 ## Commands
 
@@ -51,5 +55,5 @@ export PI_PING_MARKER="(!) "
 ```bash
 bun install
 bun run typecheck
-bun test
+bun run test
 ```
