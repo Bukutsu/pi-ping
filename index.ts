@@ -4,10 +4,10 @@
  *
  * Mechanism (same approach as Codex CLI, via pi's extension API):
  *   1. On session start: enable DECSET 1004 focus reporting on the terminal.
- *   2. Subscribe to ctx.ui.onTerminalInput — pi passes raw input to extensions
- *      before its own TUI parser, with `{ consume: true }` support.
- *   3. Terminal sends FocusIn (ESC [ I) / FocusOut (ESC [ O); we strip and
- *      consume them so pi's parser never sees them, tracking focus state.
+ *   2. Observe stdin through Pi's StdinBuffer without consuming input, because
+ *      fullscreen handles focus events before extension input listeners.
+ *   3. Track FocusIn (ESC [ I) / FocusOut (ESC [ O). The extension input
+ *      listener strips any remaining focus events and detects typed input.
  *   4. On agent_settled (after auto-retries, compaction retries, and queued
  *      follow-ups finish): ping only if terminal is unfocused AND the turn did
  *      real work (>=10s, tool calls, or errors). Runs interrupted mid-flight
@@ -26,6 +26,7 @@ import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-wo
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { appendFileSync } from "node:fs";
+import { StdinBuffer } from "@earendil-works/pi-tui";
 
 const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
 const ESC = "\x1b";
@@ -234,6 +235,8 @@ export default function (pi: ExtensionAPI): void {
   const focus = initialFocusState();
   let focusEnabled = false; // DECSET 1004 active in the current session
   let unsubscribeInput: (() => void) | undefined;
+  let unsubscribeFocus: (() => void) | undefined;
+  let hasTypedInput = false;
   let markerActive = false; // the tab title currently carries our marker
   let runInProgress = false; // agent_start fired, no settle since
   let pendingNotifyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -250,7 +253,7 @@ export default function (pi: ExtensionAPI): void {
   /** Prepend the done marker to pi's native tab title. */
   const markTitle = (ui: { setTitle(title: string): void }, ctx: ExtensionContext): void => {
     if (runInProgress || !config.marker) return;
-    if (focus.gotFocusEvent && focus.focused) return;
+    if ((focus.gotFocusEvent || hasTypedInput) && focus.focused) return;
     const base = sanitizeTitle(piTabTitle(ctx));
     if (!base || markerActive) return;
     ui.setTitle(sanitizeTitle(`${config.marker}${base}`));
@@ -265,7 +268,7 @@ export default function (pi: ExtensionAPI): void {
   };
 
   const terminalFocused = async (): Promise<boolean | null> => {
-    if (focus.gotFocusEvent) return focus.focused;
+    if (focus.gotFocusEvent || hasTypedInput) return focus.focused;
     if (process.env.TMUX) return await tmuxFocused();
     return null;
   };
@@ -288,29 +291,40 @@ export default function (pi: ExtensionAPI): void {
     writeToTty(`${ESC}[?1004h`); // ask the terminal for focus events
     focusEnabled = true;
 
-    try {
-      unsubscribeInput?.();
-      unsubscribeInput = ctx.ui.onTerminalInput((data) => {
-        const out = scanFocusInput(data, focus);
-        const hasUserTypedInput = out !== null && !isTerminalResponse(out ?? data);
+    // Fullscreen consumes focus events before extension input listeners. Observe
+    // stdin without consuming it; Pi must still receive events for its own UI.
+    unsubscribeFocus?.();
+    const buffer = new StdinBuffer();
+    const observeInput = (data: string) => {
+      const out = scanFocusInput(data, focus);
+      const typed = out !== null && !isTerminalResponse(out ?? data);
+      if (typed) {
+        hasTypedInput = true;
+        focus.focused = true;
+        focus.unfocusedAt = undefined;
+      }
+      if (focus.focused) {
+        cancelPendingNotify();
+        unmarkTitle(ctx.ui, ctx);
+      }
+    };
+    // Apply all focus evidence in stream order, not once through each parser.
+    buffer.on("data", observeInput);
+    buffer.on("paste", () => observeInput(`${ESC}[200~`));
+    const observe = (data: string | Buffer) => buffer.process(data);
+    process.stdin.on("data", observe);
+    unsubscribeFocus = () => {
+      process.stdin.off("data", observe);
+      buffer.destroy();
+    };
 
-        // The user is looking if the terminal reported FocusIn or received typed input
-        if (focus.focused || hasUserTypedInput) {
-          if (hasUserTypedInput) {
-            focus.focused = true;
-            focus.unfocusedAt = undefined;
-          }
-          cancelPendingNotify();
-          if (markerActive) {
-            unmarkTitle(ctx.ui, ctx);
-          }
-        }
-        if (out === null) return { consume: true };
-        return out === undefined ? undefined : { data: out };
-      });
-    } catch {
-      // non-interactive UI (rpc/print)
-    }
+    unsubscribeInput?.();
+    unsubscribeInput = ctx.ui.onTerminalInput((data) => {
+      // Only strip here. The stdin observer owns focus state, including typing.
+      const out = scanFocusInput(data, initialFocusState());
+      if (out === null) return { consume: true };
+      return out === undefined ? undefined : { data: out };
+    });
   });
 
   // Session-scoped teardown: idempotent, and resets state for the next session.
@@ -326,6 +340,9 @@ export default function (pi: ExtensionAPI): void {
     lastAssistant = undefined;
     usage = initialUsage();
     agentEnded = false;
+    hasTypedInput = false;
+    unsubscribeFocus?.();
+    unsubscribeFocus = undefined;
     if (!focusEnabled && !unsubscribeInput) return;
     if (markerActive && ctx) {
       unmarkTitle(ctx.ui, ctx);
@@ -424,7 +441,7 @@ export default function (pi: ExtensionAPI): void {
     const title = renderTemplate(titleTemplate, values);
 
     const deliver = () => {
-      if (generation !== notifyGeneration || runInProgress || (focus.gotFocusEvent && focus.focused)) return;
+      if (generation !== notifyGeneration || runInProgress || ((focus.gotFocusEvent || hasTypedInput) && focus.focused)) return;
       sendNotify(body, title, config);
       markTitle(ctx.ui, ctx);
     };
@@ -469,7 +486,7 @@ export default function (pi: ExtensionAPI): void {
         return;
       }
       const f = await terminalFocused();
-      const source = focus.gotFocusEvent ? "terminal-focus" : process.env.TMUX ? "tmux" : "unknown";
+      const source = focus.gotFocusEvent ? "terminal-focus" : hasTypedInput ? "terminal-input" : process.env.TMUX ? "tmux" : "unknown";
       const dur = runInProgress && startMs ? Date.now() - startMs : durationMs;
       const away = focus.unfocusedAt ? `${Math.round((Date.now() - focus.unfocusedAt) / 1000)}s` : "n/a";
       const focusStr = f === true ? "focused" : f === false ? `unfocused (away ${away})` : "?";

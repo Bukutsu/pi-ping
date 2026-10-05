@@ -31,7 +31,7 @@ Restart Pi or run `/reload` in your active session.
 
 ## Terminal support
 
-Focus tracking uses `DECSET 1004` terminal events. Under tmux, a window with no viewing clients is also treated as unfocused. A viewed tmux window leaves desktop focus unknown.
+Focus tracking uses `DECSET 1004` terminal events in both regular and fullscreen Pi modes. Keyboard or pasted input also establishes focus before the first focus event. Under tmux, a window with no viewing clients is also treated as unfocused. A viewed tmux window leaves desktop focus unknown.
 
 Notifications use OSC 99 for Kitty, OSC 9 for Ghostty, iTerm2, WezTerm, and Warp, and OSC 777 for other terminals. Delivery depends on the terminal's notification support and settings. On Linux, the OSC 777 path also tries `notify-send`; that command must be installed for desktop fallback.
 

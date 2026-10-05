@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 
+const realFs = await import("node:fs");
+const realChildProcess = await import("node:child_process");
+const { TuiAltScreen, StdinBuffer } = await import("@earendil-works/pi-tui");
 const writes: string[] = [];
 const commands: { name: string; args: string[]; callback: Function }[] = [];
-mock.module("node:fs", () => ({ appendFileSync: (_path: string, data: string) => writes.push(data) }));
-mock.module("node:child_process", () => ({ execFile: (name: string, args: string[], _options: unknown, callback: Function) => {
+mock.module("node:fs", () => ({ ...realFs, appendFileSync: (_path: string, data: string) => writes.push(data) }));
+mock.module("node:child_process", () => ({ ...realChildProcess, execFile: (name: string, args: string[], _options: unknown, callback: Function) => {
   commands.push({ name, args, callback });
   if (name !== "tmux") callback(null, "");
 } }));
@@ -17,7 +20,7 @@ let now = 100_000;
 let timers: Map<object, () => void>;
 const ESC = "\x1b";
 let fixtures: ReturnType<typeof setup>[] = [];
-function setup(mode = "tui", cwd = "/tmp/project") {
+function setup(mode = "tui", cwd = "/tmp/project", tui?: TuiAltScreen) {
   const handlers = new Map<string, Function>();
   const registeredCommands = new Map<string, { handler: Function; getArgumentCompletions?: Function }>();
   const titles: string[] = [];
@@ -25,13 +28,17 @@ function setup(mode = "tui", cwd = "/tmp/project") {
   let input: Function | undefined;
   let unsubscribed = 0;
   const ctx = { mode, cwd, sessionManager: { getSessionName: (): string | undefined => undefined }, model: undefined as { id: string; provider: string } | undefined, thinkingLevel: undefined as string | undefined, ui: {
-    onTerminalInput: (fn: Function) => { input = fn; return () => { input = undefined; unsubscribed++; }; },
+    onTerminalInput: (fn: Function) => {
+      input = fn;
+      const unsubscribe = tui?.addInputListener((data) => fn(data));
+      return () => { unsubscribe?.(); input = undefined; unsubscribed++; };
+    },
     setTitle: (title: string) => titles.push(title), notify: (text: string) => notices.push(text),
   } };
   extension({ on: (name: string, fn: Function) => handlers.set(name, fn), registerCommand: (name: string, cmd: any) => registeredCommands.set(name, cmd) } as any);
   const fixture = { ctx, titles, notices,
     emit: (name: string, event: any = {}) => handlers.get(name)?.(event, ctx),
-    input: (data: string) => input?.(data),
+    input: (data: string) => { process.stdin.emit("data", data); return input?.(data); },
     command: (name: string, args = "") => registeredCommands.get(name)!.handler(args, ctx),
     commandNames: () => [...registeredCommands.keys()],
     complete: (prefix: string) => registeredCommands.get("notify")!.getArgumentCompletions?.(prefix),
@@ -141,6 +148,102 @@ describe("run contracts", () => {
 });
 
 describe("terminal boundaries", () => {
+  test("fullscreen focus events reach the observer without bypassing viewport handling", async () => {
+    const terminal = { columns: 80, rows: 24, write() {}, hideCursor() {}, showCursor() {} };
+    const ui = new TuiAltScreen(terminal as any);
+    const f = setup("tui", "/tmp/project", ui);
+    f.emit("session_start");
+    let received = 0;
+    ui.addInputListener(() => { received++; });
+    const input = (data: string) => {
+      ui.handleTerminalInput(data);
+      process.stdin.emit("data", data);
+    };
+    input(`${ESC}[O`);
+    expect(received).toBe(0); // Fullscreen still consumes the event.
+    now += 4000;
+    writes.length = 0;
+    f.emit("agent_start"); await finish(f, "error");
+    expect(writes.at(-1)).toContain("]777;notify;");
+    input(`${ESC}[I`);
+    await f.command("notify", "check");
+    expect(f.notices.at(-1)).toContain("terminal-focus:focused");
+    writes.length = 0;
+    f.emit("agent_start"); await finish(f, "error");
+    expect(writes).toEqual([]);
+  });
+  test("batched focus events and typing retain stream order in either listener order", async () => {
+    for (const piFirst of [true, false]) {
+      const f = setup();
+      // Feed the UI parser independently of the raw observer.
+      const uiParser = new StdinBuffer();
+      let handler: Function;
+      f.ctx.ui.onTerminalInput = (fn: Function) => { handler = fn; return () => {}; };
+      uiParser.on("data", (data) => handler(data));
+      f.emit("session_start");
+      for (const [packet, expected] of [
+        [`${ESC}[Ox`, "focused"],
+        [`x${ESC}[O`, "unfocused"],
+        [`${ESC}[Ix${ESC}[O`, "unfocused"],
+      ]) {
+        if (piFirst) uiParser.process(packet);
+        process.stdin.emit("data", packet);
+        if (!piFirst) uiParser.process(packet);
+        await f.command("notify", "check");
+        expect(f.notices.at(-1)).toContain(`terminal-focus:${expected}`);
+      }
+      uiParser.destroy(); f.emit("session_shutdown");
+    }
+  });
+  test("typing establishes focus before the first focus event", async () => {
+    const f = setup(); f.emit("session_start"); f.input("hello");
+    await f.command("notify", "check");
+    expect(f.notices.at(-1)).toContain("terminal-input:focused");
+    writes.length = 0;
+    f.emit("agent_start"); await finish(f, "error");
+    expect(writes).toEqual([]);
+    process.stdin.emit("data", `${ESC}[O`);
+    now += 4000;
+    f.emit("agent_start"); await finish(f, "error");
+    expect(writes.at(-1)).toContain("]777;notify;");
+  });
+  test("raw observation reassembles focus events and treats paste as focus, not embedded events", async () => {
+    const f = setup(); f.emit("session_start");
+    process.stdin.emit("data", `${ESC}[`);
+    process.stdin.emit("data", "O");
+    await f.command("notify", "check");
+    expect(f.notices.at(-1)).toContain("terminal-focus:unfocused");
+    process.stdin.emit("data", `${ESC}[200~literal${ESC}[`);
+    process.stdin.emit("data", `I${ESC}[O${ESC}[201~`);
+    await f.command("notify", "check");
+    expect(f.notices.at(-1)).toContain("terminal-focus:focused");
+    process.stdin.emit("data", Buffer.from(`${ESC}[I`));
+    await f.command("notify", "check");
+    expect(f.notices.at(-1)).toContain("terminal-focus:focused");
+  });
+  test("returning through raw FocusIn cancels a delayed alert", async () => {
+    const f = setup(); f.emit("session_start");
+    process.stdin.emit("data", `${ESC}[O`);
+    f.emit("agent_start"); await finish(f, "error");
+    expect(timers.size).toBe(1);
+    const pending = [...timers.values()];
+    process.stdin.emit("data", `${ESC}[I`);
+    expect(timers.size).toBe(0);
+    writes.length = 0;
+    for (const callback of pending) callback();
+    expect(writes).toEqual([]);
+    expect(f.titles).toEqual([]);
+  });
+  test("raw observer is TUI-only and removed on shutdown and restart", () => {
+    const before = process.stdin.listenerCount("data");
+    const f = setup(); const headless = setup("rpc");
+    headless.emit("session_start");
+    expect(process.stdin.listenerCount("data")).toBe(before);
+    f.emit("session_start"); f.emit("session_start");
+    expect(process.stdin.listenerCount("data")).toBe(before + 1);
+    f.emit("session_shutdown");
+    expect(process.stdin.listenerCount("data")).toBe(before);
+  });
   test("tmux visibility does not claim desktop focus", async () => {
     process.env.TMUX = "test";
     const f = setup();
@@ -172,7 +275,9 @@ describe("terminal boundaries", () => {
   });
   test("keyboard and pasted input still imply focus", async () => {
     for (const data of ["hello", `${ESC}P`, `${ESC}]`, `${ESC}[200~paste${ESC}[201~`]) {
-      const f = setup(); away(f); f.input(data); await f.command("notify", "check");
+      const f = setup(); away(f); f.input(data);
+      for (const callback of [...timers.values()]) callback(); // Flush incomplete escape input.
+      await f.command("notify", "check");
       expect(f.notices.at(-1)).toContain("terminal-focus:focused");
     }
   });
