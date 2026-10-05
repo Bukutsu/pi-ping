@@ -22,16 +22,56 @@
  * plus notify-send fallback on Linux.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentEndEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { appendFileSync } from "node:fs";
 
-const MIN_WORK_MS = 10_000;
-const MIN_AWAY_MS = 3_000;
 const OSC9_TERMS = new Set(["ghostty", "iTerm.app", "WezTerm", "warp"]);
 const ESC = "\x1b";
-const DONE_MARKER = process.env.PI_PING_MARKER ?? "[!] "; // prepended to the tab title while the run is done
+type NotificationProtocol = "auto" | "osc9" | "osc99" | "osc777";
+
+function readConfig() {
+  const milliseconds = (name: string, fallback: number): number => {
+    const value = process.env[name];
+    if (value === undefined) return fallback;
+    const parsed = Number(value);
+    // Node timers clamp larger delays to 1ms.
+    if (!/^\d+$/.test(value) || !Number.isInteger(parsed) || parsed > 2_147_483_647) {
+      throw new Error(`${name} must be an integer between 0 and 2147483647 (milliseconds).`);
+    }
+    return parsed;
+  };
+  const protocol = process.env.PI_PING_PROTOCOL ?? "auto";
+  if (!["auto", "osc9", "osc99", "osc777"].includes(protocol)) {
+    throw new Error("PI_PING_PROTOCOL must be auto, osc9, osc99, or osc777.");
+  }
+  const desktopFallback = process.env.PI_PING_DESKTOP_FALLBACK ?? "true";
+  if (desktopFallback !== "true" && desktopFallback !== "false") {
+    throw new Error("PI_PING_DESKTOP_FALLBACK must be true or false.");
+  }
+  return {
+    body: process.env.PI_PING_BODY,
+    errorBody: process.env.PI_PING_ERROR_BODY,
+    title: process.env.PI_PING_TITLE,
+    errorTitle: process.env.PI_PING_ERROR_TITLE,
+    marker: process.env.PI_PING_MARKER ?? "[!] ",
+    minWorkMs: milliseconds("PI_PING_MIN_WORK_MS", 10_000),
+    minAwayMs: milliseconds("PI_PING_MIN_AWAY_MS", 3_000),
+    protocol: protocol as NotificationProtocol,
+    desktopFallback: desktopFallback === "true",
+  };
+}
+
+function formatDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+function renderTemplate(template: string, values: Record<string, string>): string {
+  // One pass: substituted directory names and other values remain literal.
+  return template.replace(/\{([a-z_]+)\}/g, (match, key: string) => Object.hasOwn(values, key) ? values[key] : match);
+}
 
 /**
  * Strip control characters before embedding a title in OSC 0. Without this, a
@@ -145,20 +185,21 @@ function writeToTty(data: string): void {
   }
 }
 
-function sendNotify(body: string, title = "Pi"): void {
+function sendNotify(body: string, title: string, config: ReturnType<typeof readConfig>): void {
   title = sanitizeTitle(title);
   body = sanitizeTitle(body);
   let seq: string;
-  let terminalNotifies = true;
-  if (process.env.KITTY_WINDOW_ID) {
+  const protocol = config.protocol === "auto"
+    ? process.env.KITTY_WINDOW_ID ? "osc99" : OSC9_TERMS.has(process.env.TERM_PROGRAM ?? "") ? "osc9" : "osc777"
+    : config.protocol;
+  if (protocol === "osc99") {
     const id = Date.now();
     seq = `${ESC}]99;i=${id}:d=0;${title}${ESC}\\${ESC}]99;i=${id}:p=body;${body}${ESC}\\`;
-  } else if (OSC9_TERMS.has(process.env.TERM_PROGRAM ?? "")) {
+  } else if (protocol === "osc9") {
     seq = `${ESC}]9;${title}: ${body}\x07`;
   } else {
     // Unknown terminal: OSC 777 may render nothing, so notify-send below covers it.
     seq = `${ESC}]777;notify;${title.replaceAll(";", ",")};${body.replaceAll(";", ",")}\x07`;
-    terminalNotifies = false;
   }
   if (process.env.TMUX) seq = `${ESC}Ptmux;${seq.replaceAll(ESC, ESC + ESC)}${ESC}\\`;
 
@@ -167,9 +208,13 @@ function sendNotify(body: string, title = "Pi"): void {
   // Desktop notification fallback for terminals that don't render OSC 99/9
   // natively. Terminals we send OSC 99/9 to show the notification themselves;
   // notify-send on top of that would duplicate it.
-  if (process.platform === "linux" && !terminalNotifies) {
-    execFile("notify-send", ["-a", "Pi", title, body], { timeout: 3000 }, () => {});
+  if (process.platform === "linux" && protocol === "osc777" && config.desktopFallback) {
+    execFile("notify-send", ["-a", "Pi", "--", title, body], { timeout: 3000 }, () => {});
   }
+}
+
+function initialUsage() {
+  return { turns: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, tokens: 0, cost: 0 };
 }
 
 // ── extension ────────────────────────────────────────────────────────────
@@ -183,6 +228,7 @@ function teardownSessions(): void {
 }
 
 export default function (pi: ExtensionAPI): void {
+  const config = readConfig();
   // Per-session state — see the note above. Never hoist these to module scope:
   // in-process child sessions (subagents) would share them with the parent.
   const focus = initialFocusState();
@@ -203,11 +249,11 @@ export default function (pi: ExtensionAPI): void {
 
   /** Prepend the done marker to pi's native tab title. */
   const markTitle = (ui: { setTitle(title: string): void }, ctx: ExtensionContext): void => {
-    if (runInProgress) return;
+    if (runInProgress || !config.marker) return;
     if (focus.gotFocusEvent && focus.focused) return;
     const base = sanitizeTitle(piTabTitle(ctx));
     if (!base || markerActive) return;
-    ui.setTitle(sanitizeTitle(`${DONE_MARKER}${base}`));
+    ui.setTitle(sanitizeTitle(`${config.marker}${base}`));
     markerActive = true;
   };
 
@@ -228,10 +274,11 @@ export default function (pi: ExtensionAPI): void {
   let durationMs = 0;
   let toolCalls = 0;
   let errors = 0;
-  let lastStopReason: string | undefined;
+  let lastAssistant: Extract<AgentEndEvent["messages"][number], { role: "assistant" }> | undefined;
+  let usage = initialUsage();
   let agentEnded = false; // agent_end fired for the current run
-  const worthNotifying = (dur: number): boolean => agentEnded && lastStopReason !== "aborted" &&
-    (lastStopReason === "error" || toolCalls > 0 || errors > 0 || dur >= MIN_WORK_MS);
+  const worthNotifying = (dur: number): boolean => agentEnded && lastAssistant?.stopReason !== "aborted" &&
+    (lastAssistant?.stopReason === "error" || toolCalls > 0 || errors > 0 || dur >= config.minWorkMs);
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui") return; // focus reporting only makes sense interactively
@@ -276,7 +323,8 @@ export default function (pi: ExtensionAPI): void {
     durationMs = 0;
     toolCalls = 0;
     errors = 0;
-    lastStopReason = undefined;
+    lastAssistant = undefined;
+    usage = initialUsage();
     agentEnded = false;
     if (!focusEnabled && !unsubscribeInput) return;
     if (markerActive && ctx) {
@@ -300,8 +348,9 @@ export default function (pi: ExtensionAPI): void {
       durationMs = 0;
       toolCalls = 0;
       errors = 0;
+      usage = initialUsage();
     }
-    lastStopReason = undefined;
+    lastAssistant = undefined;
     agentEnded = false;
     if (ctx.mode !== "tui") return;
     unmarkTitle(ctx.ui, ctx);
@@ -312,11 +361,23 @@ export default function (pi: ExtensionAPI): void {
     if (event.isError) errors++;
   });
 
-  // agent_settled has no messages; remember the final stop reason from agent_end.
+  // Count finalized responses once, not agent_end's potentially overlapping message lists.
+  pi.on("message_end", (event) => {
+    if (!runInProgress || event.message.role !== "assistant") return;
+    const reported = event.message.usage;
+    usage.turns++;
+    usage.input += reported?.input ?? 0;
+    usage.output += reported?.output ?? 0;
+    usage.cacheRead += reported?.cacheRead ?? 0;
+    usage.cacheWrite += reported?.cacheWrite ?? 0;
+    usage.tokens += reported?.totalTokens ?? 0;
+    usage.cost += reported?.cost?.total ?? 0;
+  });
+
+  // agent_settled has no messages; retain the final assistant response from agent_end.
   pi.on("agent_end", (event) => {
     agentEnded = true;
-    const lastAssistant = [...(event.messages ?? [])].reverse().find((m) => m.role === "assistant");
-    lastStopReason = lastAssistant?.stopReason;
+    lastAssistant = [...(event.messages ?? [])].reverse().find((m) => m.role === "assistant");
   });
 
   // Ping only once the run has fully settled — no pending auto-retry,
@@ -328,35 +389,57 @@ export default function (pi: ExtensionAPI): void {
     runInProgress = false;
     const dur = durationMs = startMs ? Date.now() - startMs : 0;
     if (!worthNotifying(dur)) return;
-    const isError = lastStopReason === "error";
+    const isError = lastAssistant?.stopReason === "error";
 
     const focusedNow = await terminalFocused();
     if (generation !== notifyGeneration || focusedNow === true) return; // stale or you're looking
 
-    const parts = [];
-    if (toolCalls > 0) parts.push(`${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`);
-    if (errors > 0) parts.push(`${errors} error${errors === 1 ? "" : "s"}`);
-    if (dur >= 1000) parts.push(`${Math.round(dur / 1000)}s`);
-    const body = parts.join(", ") || (isError ? "error" : "done");
-    const title = notifyTitle(ctx, isError ? "error" : undefined);
+    const values = {
+      duration: formatDuration(dur),
+      duration_ms: String(dur),
+      tools: String(toolCalls),
+      errors: String(errors),
+      status: isError ? "error" : "done",
+      dir: basename(ctx.cwd),
+      cwd: ctx.cwd,
+      session: ctx.sessionManager.getSessionName() ?? "",
+      model: lastAssistant?.model ?? ctx.model?.id ?? "",
+      provider: lastAssistant?.provider ?? ctx.model?.provider ?? "",
+      thinking: lastAssistant?.thinkingLevel ?? ctx.thinkingLevel ?? "",
+      stop_reason: lastAssistant?.stopReason ?? "",
+      error_message: isError ? lastAssistant?.errorMessage ?? "" : "",
+      turns: String(usage.turns),
+      input_tokens: String(usage.input),
+      output_tokens: String(usage.output),
+      cache_read_tokens: String(usage.cacheRead),
+      cache_write_tokens: String(usage.cacheWrite),
+      tokens: String(usage.tokens),
+      cost: usage.cost.toFixed(4),
+    };
+    const bodyTemplate = (isError ? config.errorBody ?? config.body : config.body)
+      ?? (isError ? "Stopped after {duration}" : "Done in {duration}");
+    const titleTemplate = (isError ? config.errorTitle ?? config.title : config.title)
+      ?? (values.session ? "Pi: {session}" : values.dir ? "Pi: {dir}" : "Pi");
+    const body = renderTemplate(bodyTemplate, values);
+    const title = renderTemplate(titleTemplate, values);
 
     const deliver = () => {
       if (generation !== notifyGeneration || runInProgress || (focus.gotFocusEvent && focus.focused)) return;
-      sendNotify(body, title);
+      sendNotify(body, title, config);
       markTitle(ctx.ui, ctx);
     };
 
-    // If we have continuous focus tracking, require at least MIN_AWAY_MS of
+    // If we have continuous focus tracking, require the configured minimum of
     // unfocused time before alerting so quick window switches stay quiet.
     if (focus.gotFocusEvent && focus.unfocusedAt !== undefined) {
       const awayMs = Date.now() - focus.unfocusedAt;
-      if (awayMs < MIN_AWAY_MS) {
+      if (awayMs < config.minAwayMs) {
         pendingNotifyTimer = setTimeout(() => {
           pendingNotifyTimer = undefined;
           if (focus.gotFocusEvent && !focus.focused && !runInProgress) {
             deliver();
           }
-        }, MIN_AWAY_MS - awayMs);
+        }, config.minAwayMs - awayMs);
         pendingNotifyTimer.unref?.();
         return;
       }
@@ -365,9 +448,26 @@ export default function (pi: ExtensionAPI): void {
     deliver();
   });
 
-  pi.registerCommand("notify-check", {
-    description: "Report focus source, turn stats, and whether a ping would fire.",
-    handler: async (_args, ctx) => {
+  pi.registerCommand("notify", {
+    description: "Check notification status or send a test: /notify [check|test].",
+    getArgumentCompletions: (prefix) => {
+      const items = [
+        { value: "check", label: "check", description: "Check focus and notification eligibility" },
+        { value: "test", label: "test", description: "Send a test notification" },
+      ].filter((item) => item.value.startsWith(prefix));
+      return items.length > 0 ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const action = args.trim() || "check";
+      if (action === "test") {
+        sendNotify("Desktop and terminal notifications are working.", notifyTitle(ctx, "test"), config);
+        ctx.ui.notify("Test notification sent.", "info");
+        return;
+      }
+      if (action !== "check") {
+        ctx.ui.notify("Usage: /notify [check|test]", "warning");
+        return;
+      }
       const f = await terminalFocused();
       const source = focus.gotFocusEvent ? "terminal-focus" : process.env.TMUX ? "tmux" : "unknown";
       const dur = runInProgress && startMs ? Date.now() - startMs : durationMs;
@@ -376,14 +476,6 @@ export default function (pi: ExtensionAPI): void {
       const would = f !== true && !runInProgress && worthNotifying(dur);
       const msg = `focus ${source}:${focusStr} | tools=${toolCalls} errors=${errors} dur=${Math.round(dur / 1000)}s | would ${would ? "PING" : "silent"}`;
       ctx.ui.notify(msg, "info");
-    },
-  });
-
-  pi.registerCommand("notify-test", {
-    description: "Send an immediate test notification.",
-    handler: async (_args, ctx) => {
-      sendNotify("Desktop and terminal notifications are working.", notifyTitle(ctx, "test"));
-      ctx.ui.notify("Test notification sent.", "info");
     },
   });
 }

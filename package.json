@@ -60,7 +60,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.0"
+    "@earendil-works/pi-coding-agent": "1.0.3"
   },
   "pi": {
     "extensions": [
