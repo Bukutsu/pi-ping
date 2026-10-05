@@ -1,8 +1,10 @@
 # pi-ping
 
-Focus-aware notifications and tab marker for the [Pi coding agent](https://pi.dev/).
+Desktop notifications for the [Pi coding agent](https://pi.dev/) when you step away.
 
-pi-ping alerts you when a run finishes while you are in another window, and marks the terminal tab with `[!] ` until you return. It stays quiet when terminal focus reporting confirms you are looking. If desktop focus is unknown, qualifying runs still alert.
+When a qualifying run finishes while you are away, pi-ping sends a notification and adds `[!] ` to the terminal tab title. It stays quiet while the terminal is known to be focused. Return to the tab, type, or start another run to clear the marker.
+
+If focus is unknown, qualifying runs still alert.
 
 Repository: <https://github.com/Bukutsu/pi-ping>
 
@@ -20,42 +22,51 @@ pi install git:github.com/Bukutsu/pi-ping
 
 Restart Pi or run `/reload` in your active session.
 
-## What it does
+## When it pings
 
-- Suppresses notifications when the terminal is known to be focused.
-- Adds `[!] ` to Pi's tab title while a finished run is unread, and restores it when you return or type.
-- Stays quiet on short turns (under 10s with no tools or errors) and cancelled runs.
-- With terminal focus events, waits until you have been away for 3 seconds before alerting.
-- Alerts once after the run fully settles (no pings during intermediate tool calls or auto-retries).
-- Uses native terminal escapes (OSC 9, 99, 777) with `notify-send` fallback on Linux.
+A run qualifies if it lasts at least 10 seconds, uses a tool, or has an error. Short runs with no tools or errors stay silent, as do cancelled runs.
+
+The notification waits until the run has fully settled, including retries and queued follow-ups. Intermediate tool calls and auto-retries do not send separate alerts.
+
+When terminal focus events are available, you must have been away for at least 3 seconds. Returning before that delay expires cancels the pending alert.
 
 ## Terminal support
 
-Focus tracking uses `DECSET 1004` terminal events in both regular and fullscreen Pi modes. Keyboard or pasted input also establishes focus before the first focus event. Under tmux, a window with no viewing clients is also treated as unfocused. A viewed tmux window leaves desktop focus unknown.
+Focus tracking works in regular and fullscreen Pi modes through `DECSET 1004` terminal events. Typing or pasting also establishes focus before the first event arrives.
 
-Notifications use OSC 99 for Kitty, OSC 9 for Ghostty, iTerm2, WezTerm, and Warp, and OSC 777 for other terminals. Delivery depends on the terminal's notification support and settings. On Linux, the OSC 777 path also tries `notify-send`; that command must be installed for desktop fallback.
+Under tmux, a window with no viewing clients counts as unfocused. A viewed window alone cannot tell pi-ping whether the desktop terminal is focused. Terminal notifications under tmux require passthrough to be enabled.
 
-Focus support alone does not guarantee notification delivery. There is no native Windows toast backend. Under tmux, terminal notifications also require passthrough to be enabled.
+Notification delivery uses the terminal's native escape sequences:
+
+| Terminal | Protocol |
+| --- | --- |
+| Kitty | OSC 99 |
+| Ghostty, iTerm2, WezTerm, Warp | OSC 9 |
+| Other terminals | OSC 777 |
+
+On Linux, the OSC 777 path also tries `notify-send`. Install that command if you need the desktop fallback.
+
+Delivery depends on your terminal's notification support and settings. A terminal can report focus without supporting notifications. There is no native Windows toast backend.
 
 ## Commands
 
-- `/notify` or `/notify check`: Check focus source, away time, and whether an alert would fire.
-- `/notify test`: Send an immediate test notification.
+- `/notify` or `/notify check` shows the focus source, away time, and run eligibility.
+- `/notify test` sends a notification immediately, even while focused.
 
-Type `/notify ` to see subcommand completions. Invalid arguments show usage without sending a notification.
+Type `/notify ` for subcommand completions. Invalid arguments show usage and send nothing.
 
 ## Configuration
 
-The default notification shows the session name (or directory if unnamed) and elapsed time:
+By default, the notification shows the session name and elapsed time. Unnamed sessions use the directory name:
 
 ```text
 Pi: pi-ping
 Done in 12s
 ```
 
-On final failure, the body reads `Stopped after 1m 04s`. Counts, model details, cost, and raw error text stay out of the default message.
+A final failure uses `Stopped after 1m 04s`. The defaults omit counts, model details, cost, and raw error text.
 
-Set environment variables before starting Pi to customize it.
+Set these environment variables before starting Pi:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -69,7 +80,9 @@ Set environment variables before starting Pi to customize it.
 | `PI_PING_PROTOCOL` | `auto` | Terminal notification protocol: `auto`, `osc9`, `osc99`, or `osc777`. |
 | `PI_PING_DESKTOP_FALLBACK` | `true` | Set to `false` to disable Linux `notify-send` fallback on the OSC 777 path. |
 
-Duration settings accept whole milliseconds from `0` to `2147483647`. Invalid numbers, protocols, or boolean values fail at extension load with the variable name in the error. Focus suppression and cancellation handling still apply, including when thresholds are zero.
+Duration settings accept whole milliseconds from `0` to `2147483647`. Invalid numbers, protocols, or boolean values stop the extension from loading. The error names the variable.
+
+Zero thresholds still respect focus suppression and cancellation.
 
 ### Message templates
 
@@ -98,11 +111,13 @@ Duration settings accept whole milliseconds from `0` to `2147483647`. Invalid nu
 | `{tokens}` | Sum of Pi's reported total tokens. |
 | `{cost}` | Sum of Pi's estimated costs in USD, with four decimal places and no currency symbol, such as `0.0324`. |
 
-Usage totals cover assistant responses observed during this run, including retries and queued continuations. They reset for the next run. They are not session totals and do not separately include background-agent or compaction usage unless it appears in those responses. Missing usage contributes zero; a zero cost does not establish that the provider billed nothing. Optional metadata is empty when unavailable.
+Usage totals cover assistant responses observed in the current run, including retries and queued continuations. They reset when the next run starts. Background-agent and compaction usage is included only if it appears in those responses.
 
-A failed tool call increments `{errors}` but does not make `{status}` become `error` if Pi recovers. Error templates apply only when the final assistant stop reason is `error`. A `length` stop remains `done`; use `{stop_reason}` if you need to distinguish it.
+Missing usage counts as zero. A zero cost does not prove the provider billed nothing. Optional metadata is empty when unavailable.
 
-For example:
+Error templates apply only when the final assistant stop reason is `error`. A failed tool call increments `{errors}`, but the status remains `done` if Pi recovers. A `length` stop also counts as `done`; use `{stop_reason}` to distinguish it.
+
+To change the wording, marker, and thresholds:
 
 ```bash
 export PI_PING_BODY="Completed in {duration}"
@@ -113,7 +128,7 @@ export PI_PING_MIN_WORK_MS=15000
 export PI_PING_MIN_AWAY_MS=5000
 ```
 
-For more detail:
+To include model details, usage, and error text:
 
 ```bash
 export PI_PING_TITLE="Pi: {dir} [{model}]"
@@ -122,13 +137,15 @@ export PI_PING_ERROR_TITLE="Pi: {dir} needs attention"
 export PI_PING_ERROR_BODY="Stopped after {duration}: {error_message}"
 ```
 
-Error messages can be long and may contain sensitive provider/request details. Include `{error_message}` only if you want that text visible in desktop notifications.
+Error text can be long and contain sensitive provider or request details. Use `{error_message}` only if you want those details in desktop notifications.
 
-Templates use literal substitution, with no conditionals or expression evaluation. Unknown placeholders stay unchanged. Empty templates produce empty text. Terminal control characters are stripped before delivery.
+Templates substitute placeholder values literally. They do not evaluate expressions or support conditionals. Unknown placeholders stay unchanged, and terminal control characters are stripped before delivery.
 
-Custom templates override the defaults, including empty strings. Setting only `PI_PING_BODY` or `PI_PING_TITLE` also applies that template to errors; set the corresponding error template for different wording.
+Custom templates replace the defaults. An empty string produces empty text. Setting `PI_PING_BODY` or `PI_PING_TITLE` also changes error notifications unless you set the corresponding error template.
 
-Settings are read when the extension factory loads. Restart Pi after changing its launch environment; `/reload` only picks up changes already present in the running process's environment. `/notify test` uses the configured protocol and fallback but keeps its fixed test message and title.
+Settings are read when the extension factory loads. Restart Pi after changing its launch environment. `/reload` can only read environment changes already present in the running process.
+
+`/notify test` uses your protocol and fallback settings, with a fixed test message and title.
 
 ## Development
 
