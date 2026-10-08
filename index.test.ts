@@ -137,6 +137,13 @@ describe("run contracts", () => {
     f.emit("agent_start"); f.emit("tool_execution_end", { isError: true }); await finish(f, "aborted");
     expect(writes).toEqual([]);
   });
+  test("settled aborted flag suppresses notification even when final response looks successful", async () => {
+    const f = setup(); away(f); f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });
+    f.emit("agent_end", { messages: [{ role: "assistant", stopReason: "stop" }] });
+    await f.emit("agent_settled", { aborted: true });
+    expect(writes).toEqual([]);
+    expect(f.titles).toEqual([]);
+  });
   test("retries aggregate tools until settlement", async () => {
     process.env.PI_PING_BODY = "{tools} tool calls";
     const f = setup(); away(f); f.emit("agent_start"); f.emit("tool_execution_end", { isError: false });

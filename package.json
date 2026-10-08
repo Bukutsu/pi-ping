@@ -1,6 +1,6 @@
 {
   "name": "@bukutsu/pi-ping",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Minimal, focus-aware desktop notifications for the Pi coding agent. Alerts for finished runs in an unfocused terminal, customizable messages, and unread tab markers. Unknown focus falls back to alerts.",
   "type": "module",
   "repository": {

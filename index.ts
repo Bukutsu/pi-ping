@@ -399,13 +399,13 @@ export default function (pi: ExtensionAPI): void {
 
   // Ping only once the run has fully settled — no pending auto-retry,
   // compaction retry, or queued follow-up will run afterwards.
-  pi.on("agent_settled", async (_event, ctx) => {
+  pi.on("agent_settled", async (event, ctx) => {
     if (ctx.mode !== "tui") return; // headless/child session (e.g. subagent) — parent pings instead
     cancelPendingNotify();
     const generation = notifyGeneration;
     runInProgress = false;
     const dur = durationMs = startMs ? Date.now() - startMs : 0;
-    if (!worthNotifying(dur)) return;
+    if (("aborted" in event && event.aborted) || !worthNotifying(dur)) return;
     const isError = lastAssistant?.stopReason === "error";
 
     const focusedNow = await terminalFocused();
