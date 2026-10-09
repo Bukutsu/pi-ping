@@ -472,6 +472,30 @@ describe("configuration", () => {
 });
 
 describe("lifecycle", () => {
+  for (const mode of ["rpc", "json", "print"]) {
+    test(`${mode} sessions stay inactive, including notify commands`, async () => {
+      process.env.TMUX = "test";
+      const beforeExit = process.listenerCount("exit");
+      const beforeInput = process.stdin.listenerCount("data");
+      const f = setup(mode);
+      f.emit("session_start");
+      f.emit("agent_start");
+      f.emit("tool_execution_end", { isError: true });
+      f.emit("message_end", { message: { role: "assistant", usage: { totalTokens: 42 } } });
+      now += 20_000;
+      await finish(f, "error");
+      for (const action of ["", "check", "test", "invalid"]) await f.command("notify", action);
+      f.emit("session_shutdown");
+      expect(writes).toEqual([]);
+      expect(commands).toEqual([]);
+      expect(f.titles).toEqual([]);
+      expect(f.notices).toEqual([]);
+      expect(timers.size).toBe(0);
+      expect(process.listenerCount("exit")).toBe(beforeExit);
+      expect(process.stdin.listenerCount("data")).toBe(beforeInput);
+    });
+  }
+
   test("only the last TUI owner disables terminal focus reporting", () => {
     const first = setup(); const second = setup(); first.emit("session_start"); second.emit("session_start");
     writes.length = 0; first.emit("session_shutdown"); expect(writes).toEqual([]);

@@ -358,6 +358,7 @@ export default function (pi: ExtensionAPI): void {
   pi.on("session_shutdown", (_event, ctx) => disableFocus(ctx));
 
   pi.on("agent_start", (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
     cancelPendingNotify();
     if (!runInProgress || !startMs) {
       runInProgress = true;
@@ -369,17 +370,18 @@ export default function (pi: ExtensionAPI): void {
     }
     lastAssistant = undefined;
     agentEnded = false;
-    if (ctx.mode !== "tui") return;
     unmarkTitle(ctx.ui, ctx);
   });
 
-  pi.on("tool_execution_end", (event) => {
+  pi.on("tool_execution_end", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
     toolCalls++;
     if (event.isError) errors++;
   });
 
   // Count finalized responses once, not agent_end's potentially overlapping message lists.
-  pi.on("message_end", (event) => {
+  pi.on("message_end", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
     if (!runInProgress || event.message.role !== "assistant") return;
     const reported = event.message.usage;
     usage.turns++;
@@ -392,7 +394,8 @@ export default function (pi: ExtensionAPI): void {
   });
 
   // agent_settled has no messages; retain the final assistant response from agent_end.
-  pi.on("agent_end", (event) => {
+  pi.on("agent_end", (event, ctx) => {
+    if (ctx.mode !== "tui") return;
     agentEnded = true;
     lastAssistant = [...(event.messages ?? [])].reverse().find((m) => m.role === "assistant");
   });
@@ -475,6 +478,7 @@ export default function (pi: ExtensionAPI): void {
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
+      if (ctx.mode !== "tui") return;
       const action = args.trim() || "check";
       if (action === "test") {
         sendNotify("Desktop and terminal notifications are working.", notifyTitle(ctx, "test"), config);

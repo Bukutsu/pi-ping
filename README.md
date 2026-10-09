@@ -6,6 +6,8 @@ When a qualifying run finishes while you are away, pi-ping sends a notification 
 
 If focus is unknown, qualifying runs still alert.
 
+Only interactive TUI sessions are supported. Pi still imports the extension in RPC, JSON, and print modes, but notifications, focus tracking, and /notify stay inactive.
+
 Repository: <https://github.com/Bukutsu/pi-ping>
 
 ## Install
