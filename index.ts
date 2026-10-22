@@ -408,7 +408,7 @@ export default function (pi: ExtensionAPI): void {
     const generation = notifyGeneration;
     runInProgress = false;
     const dur = durationMs = startMs ? Date.now() - startMs : 0;
-    if (("aborted" in event && event.aborted) || !worthNotifying(dur)) return;
+    if (event.aborted || !worthNotifying(dur)) return;
     const isError = lastAssistant?.stopReason === "error";
 
     const focusedNow = await terminalFocused();

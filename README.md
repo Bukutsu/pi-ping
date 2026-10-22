@@ -50,6 +50,8 @@ On Linux, the OSC 777 path also tries `notify-send`. Install that command if you
 
 Delivery depends on your terminal's notification support and settings. A terminal can report focus without supporting notifications. There is no native Windows toast backend.
 
+Pi 1.1+ also reports working, done, and error states with OSC 7501 to terminals that support it, such as Rex. That status shows in tabs and session pickers; pi-ping adds the desktop alert and the `[!] ` tab marker on top.
+
 ## Commands
 
 - `/notify` or `/notify check` shows the focus source, away time, and run eligibility.
